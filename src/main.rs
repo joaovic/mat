@@ -230,8 +230,8 @@ fn send_message_to_tmux_window(window: &str, message: &str) -> Result<(), String
 
 fn prepare_merge_command(branch_name: &str) -> String {
     format!(
-        "git merge {} --no-ff -m \"Merge {}\"",
-        branch_name, branch_name
+        "git merge {}",
+        branch_name
     )
 }
 
