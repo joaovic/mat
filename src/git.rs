@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,7 +10,6 @@ use crate::error::MatError;
 pub struct CommandOutput {
     pub stdout: String,
     pub stderr: String,
-    pub status: i32,
 }
 
 pub trait CommandRunner {
@@ -32,7 +32,6 @@ impl CommandRunner for RealRunner {
         let result = CommandOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            status: output.status.code().unwrap_or(-1),
         };
 
         if !output.status.success() {
@@ -46,11 +45,13 @@ impl CommandRunner for RealRunner {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct MockRunner {
     responses: HashMap<String, Result<CommandOutput, MatError>>,
 }
 
+#[cfg(test)]
 impl MockRunner {
     pub fn new() -> Self {
         MockRunner {
@@ -78,6 +79,7 @@ impl MockRunner {
     }
 }
 
+#[cfg(test)]
 impl CommandRunner for MockRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, MatError> {
         let key = Self::make_key(program, args);
@@ -107,6 +109,7 @@ impl<R: CommandRunner> GitClient<R> {
         GitClient { runner }
     }
 
+    #[cfg(test)]
     pub fn is_repo(&self) -> Result<bool, MatError> {
         match self.runner.run("git", &["rev-parse", "--git-dir"]) {
             Ok(_) => Ok(true),
@@ -279,7 +282,6 @@ mod tests {
         CommandOutput {
             stdout: stdout.to_string(),
             stderr: String::new(),
-            status: 0,
         }
     }
 
@@ -287,7 +289,6 @@ mod tests {
         CommandOutput {
             stdout: String::new(),
             stderr: stderr.to_string(),
-            status: 1,
         }
     }
 
@@ -743,7 +744,7 @@ branch refs/heads/fix/b
         let runner = RealRunner;
         let result = runner.run("true", &[]);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().status, 0);
+        assert!(result.unwrap().stdout.is_empty());
     }
 
     #[test]

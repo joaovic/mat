@@ -71,11 +71,13 @@ impl<R: CommandRunner> TmuxClient<R> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn display_message(&self, format: &str) -> Result<String, MatError> {
         let output = self.run_tmux(&["display-message", "-p", format])?;
         Ok(output.stdout.trim().to_string())
     }
 
+    #[cfg(test)]
     pub fn get_prefix(&self) -> Result<String, MatError> {
         let output = self.run_tmux(&["show-options", "-g", "prefix"])?;
         let prefix = output
@@ -87,6 +89,7 @@ impl<R: CommandRunner> TmuxClient<R> {
         Ok(prefix)
     }
 
+    #[cfg(test)]
     pub fn is_running(&self) -> Result<bool, MatError> {
         match self.runner.run("tmux", &["list-sessions"]) {
             Ok(_) => Ok(true),
@@ -132,7 +135,6 @@ mod tests {
         CommandOutput {
             stdout: stdout.to_string(),
             stderr: String::new(),
-            status: 0,
         }
     }
 
@@ -140,7 +142,6 @@ mod tests {
         CommandOutput {
             stdout: String::new(),
             stderr: stderr.to_string(),
-            status: 1,
         }
     }
 

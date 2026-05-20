@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn test_parse_toml_value_float() {
-        assert_eq!(parse_toml_value("3.14"), toml::Value::Float(3.14));
+        assert_eq!(parse_toml_value("2.5"), toml::Value::Float(2.5));
     }
 
     #[test]

@@ -192,7 +192,6 @@ mod tests {
         CommandOutput {
             stdout: stdout.to_string(),
             stderr: String::new(),
-            status: 0,
         }
     }
 
@@ -200,7 +199,6 @@ mod tests {
         CommandOutput {
             stdout: String::new(),
             stderr: stderr.to_string(),
-            status: 1,
         }
     }
 
