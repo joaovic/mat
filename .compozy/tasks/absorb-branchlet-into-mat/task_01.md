@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Module split and MatError enum
 type: refactor
 complexity: critical
@@ -32,13 +32,13 @@ Split the 505-line monolithic `src/main.rs` into the 10-module structure defined
 </requirements>
 
 ## Subtasks
-- [ ] 01.1 Create `src/error.rs` with `MatError` enum and `impl Display` and `impl From<std::io::Error>` for it
-- [ ] 01.2 Create `src/display.rs` and move the four print functions (error, success, info, tip) into it
-- [ ] 01.3 Create `src/cli.rs` and move the `Cli` struct with clap derive into it
-- [ ] 01.4 Create placeholder modules (`config.rs`, `git.rs`, `tmux.rs`, `naming.rs`) with stub types (empty structs) so the code compiles
-- [ ] 01.5 Create placeholder command modules (`commands/create.rs`, `commands/close.rs`, `commands/config.rs`) with stub handler functions
-- [ ] 01.6 Rewrite `handle_create_mode` and `handle_close_mode` to return `Result<(), MatError>` instead of calling `process::exit(1)`
-- [ ] 01.7 Update `main()` to have a single exit point: match on `Result` and call `process::exit` with the appropriate code only once
+- [x] 01.1 Create `src/error.rs` with `MatError` enum and `impl Display` and `impl From<std::io::Error>` for it
+- [x] 01.2 Create `src/display.rs` and move the four print functions (error, success, info, tip) into it
+- [x] 01.3 Create `src/cli.rs` and move the `Cli` struct with clap derive into it
+- [x] 01.4 Create placeholder modules (`config.rs`, `git.rs`, `tmux.rs`, `naming.rs`) with stub types (empty structs) so the code compiles
+- [x] 01.5 Create placeholder command modules (`commands/create.rs`, `commands/close.rs`, `commands/config.rs`) with stub handler functions
+- [x] 01.6 Rewrite `handle_create_mode` and `handle_close_mode` to return `Result<(), MatError>` instead of calling `process::exit(1)`
+- [x] 01.7 Update `main()` to have a single exit point: match on `Result` and call `process::exit` with the appropriate code only once
 
 ## Implementation Details
 
@@ -75,13 +75,13 @@ See TechSpec "System Architecture" section for the complete module diagram and "
 
 ## Tests
 - Unit tests:
-  - [ ] `MatError::Git` displays command name and stderr in its message
-  - [ ] `MatError::Validation` displays the validation message
-  - [ ] `MatError::Io` correctly wraps `std::io::Error` via `From` impl
-  - [ ] `print_error` writes to stderr with red "ERROR:" prefix
-  - [ ] `print_success` writes to stdout with green checkmark prefix
-  - [ ] CLI parsing: `mat feat login` parses correctly into task_type="feat", task_name="login"
-  - [ ] CLI parsing: `mat --close` sets close=true and ignores positional args
+  - [x] `MatError::Git` displays command name and stderr in its message
+  - [x] `MatError::Validation` displays the validation message
+  - [x] `MatError::Io` correctly wraps `std::io::Error` via `From` impl
+  - [x] `print_error` writes to stderr with red "ERROR:" prefix
+  - [x] `print_success` writes to stdout with green checkmark prefix
+  - [x] CLI parsing: `mat feat login` parses correctly into task_type="feat", task_name="login"
+  - [x] CLI parsing: `mat --close` sets close=true and ignores positional args
 
 ## Success Criteria
 - All tests passing

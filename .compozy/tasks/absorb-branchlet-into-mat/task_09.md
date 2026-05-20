@@ -1,12 +1,12 @@
 ---
-status: pending
+status: completed
 title: Integration tests
 type: test
 complexity: medium
 dependencies:
-  - task_06
-  - task_07
-  - task_08
+    - task_06
+    - task_07
+    - task_08
 ---
 
 # Task 09: Integration tests

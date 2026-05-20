@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: CLI restructuring with clap subcommands
 type: backend
 complexity: medium
@@ -32,12 +32,12 @@ Restructure the CLI from flat positional args to clap subcommands as defined in 
 - MUST define `cli::parse` function that returns `Result<Command, MatError>` with validation errors for missing required args
 
 ## Subtasks
-- [ ] 05.1 Define `Command` enum with all variants in `src/cli.rs`
-- [ ] 05.2 Define clap subcommand structs for `Create`, `Close`, `ConfigList`, `ConfigGet`, `ConfigSet`
-- [ ] 05.3 Implement `cli::parse()` that converts clap-parsed args into `Command` enum
-- [ ] 05.4 Wire `--close`/`-c` as deprecated alias with warning message
-- [ ] 05.5 Update `main.rs` to dispatch `Command` variants to handler functions
-- [ ] 05.6 Write unit tests for CLI parsing of all subcommands and flag combinations
+- [x] 05.1 Define `Command` enum with all variants in `src/cli.rs`
+- [x] 05.2 Define clap subcommand structs for `Create`, `Close`, `ConfigList`, `ConfigGet`, `ConfigSet`
+- [x] 05.3 Implement `cli::parse()` that converts clap-parsed args into `Command` enum
+- [x] 05.4 Wire `--close`/`-c` as deprecated alias with warning message
+- [x] 05.5 Update `main.rs` to dispatch `Command` variants to handler functions
+- [x] 05.6 Write unit tests for CLI parsing of all subcommands and flag combinations
 
 ## Implementation Details
 
@@ -65,19 +65,19 @@ See TechSpec "CLI Surface" table for the complete subcommand + flags matrix. See
 
 ## Tests
 - Unit tests:
-  - [ ] `mat feat login` parses to `Command::Create { task_type: "feat", task_name: "login", source: None, no_worktree: false, use_tmux: false }`
-  - [ ] `mat fix bug --no-worktree` parses to `Command::Create { task_type: "fix", task_name: "bug", no_worktree: true }`
-  - [ ] `mat feat login --source develop` parses with `source: Some("develop")`
-  - [ ] `mat feat login --use-tmux` parses with `use_tmux: true`
-  - [ ] `mat close` parses to `Command::Close { no_merge: false }`
-  - [ ] `mat close --no-merge` parses to `Command::Close { no_merge: true }`
-  - [ ] `mat --close` parses to `Command::Close { no_merge: false }` with deprecation warning
-  - [ ] `mat -c` parses to `Command::Close { no_merge: false }` with deprecation warning
-  - [ ] `mat config list` parses to `Command::ConfigList`
-  - [ ] `mat config get default_branch` parses to `Command::ConfigGet { key: "default_branch" }`
-  - [ ] `mat config set merge_strategy fast-forward` parses with `global: false`
-  - [ ] `mat config set --global default_branch develop` parses with `global: true`
-  - [ ] Missing task_type in create mode returns `MatError::Validation`
+  - [x] `mat feat login` parses to `Command::Create { task_type: "feat", task_name: "login", source: None, no_worktree: false, use_tmux: false }`
+  - [x] `mat fix bug --no-worktree` parses to `Command::Create { task_type: "fix", task_name: "bug", no_worktree: true }`
+  - [x] `mat feat login --source develop` parses with `source: Some("develop")`
+  - [x] `mat feat login --use-tmux` parses with `use_tmux: true`
+  - [x] `mat close` parses to `Command::Close { no_merge: false }`
+  - [x] `mat close --no-merge` parses to `Command::Close { no_merge: true }`
+  - [x] `mat --close` parses to `Command::Close { no_merge: false }` with deprecation warning
+  - [x] `mat -c` parses to `Command::Close { no_merge: false }` with deprecation warning
+  - [x] `mat config list` parses to `Command::ConfigList`
+  - [x] `mat config get default_branch` parses to `Command::ConfigGet { key: "default_branch" }`
+  - [x] `mat config set merge_strategy fast-forward` parses with `global: false`
+  - [x] `mat config set --global default_branch develop` parses with `global: true`
+  - [x] Missing task_type in create mode returns `MatError::Validation`
 - Test coverage target: >=80%
 - All tests must pass
 

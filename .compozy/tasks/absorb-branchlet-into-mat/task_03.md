@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: TmuxClient and naming module
 type: backend
 complexity: medium
@@ -35,12 +35,12 @@ Implement `TmuxClient<R>` with all tmux operations (new-window, rename-window, l
 - `get_app_name` logic (basename of CWD) MUST be included in naming module
 
 ## Subtasks
-- [ ] 03.1 Implement `TmuxClient<R>` struct with `CommandRunner` generic parameter in `src/tmux.rs`
-- [ ] 03.2 Implement window management methods: `new_window`, `rename_window`, `list_windows`, `select_window`, `kill_window`, `current_window_index`
-- [ ] 03.3 Implement utility methods: `set_buffer`, `display_message`, `get_prefix`, `is_running`
-- [ ] 03.4 Implement `Names` struct and `get_app_name` helper in `src/naming.rs`
-- [ ] 03.5 Implement `generate_names` with config-driven worktree path resolution and template variable substitution
-- [ ] 03.6 Write unit tests for naming module and TmuxClient using MockRunner
+- [x] 03.1 Implement `TmuxClient<R>` struct with `CommandRunner` generic parameter in `src/tmux.rs`
+- [x] 03.2 Implement window management methods: `new_window`, `rename_window`, `list_windows`, `select_window`, `kill_window`, `current_window_index`
+- [x] 03.3 Implement utility methods: `set_buffer`, `display_message`, `get_prefix`, `is_running`
+- [x] 03.4 Implement `Names` struct and `get_app_name` helper in `src/naming.rs`
+- [x] 03.5 Implement `generate_names` with config-driven worktree path resolution and template variable substitution
+- [x] 03.6 Write unit tests for naming module and TmuxClient using MockRunner
 
 ## Implementation Details
 
@@ -68,18 +68,18 @@ See TechSpec "Core Interfaces" for `Names` struct and `generate_names` signature
 
 ## Tests
 - Unit tests:
-  - [ ] `generate_names` produces worktree_name `"dashboard-feat/login"` for app="dashboard", type="feat", name="login"
-  - [ ] `generate_names` produces branch_name `"feat/login"` for type="feat", name="login"
-  - [ ] `generate_names` produces window_name `"dashboard-feat/login"`
-  - [ ] Different task_type produces different worktree_name (collision prevention)
-  - [ ] `worktree_path` defaults to `{repo_dir}.worktree/{worktree_name}/` when no config set
-  - [ ] `worktree_path` substitutes `{app}`, `{type}`, `{name}` template variables from config
-  - [ ] `get_app_name` extracts directory basename from CWD
-  - [ ] `TmuxClient::new_window` constructs correct args: `-c <path>`
-  - [ ] `TmuxClient::rename_window` passes window name correctly
-  - [ ] `TmuxClient::close_current_window` switches before killing on multi-window session
-  - [ ] `TmuxClient::get_prefix` parses `C-b` from `tmux show-options -g prefix` output
-  - [ ] All tmux methods return `MatError::Tmux` on non-zero exit status
+  - [x] `generate_names` produces worktree_name `"dashboard-feat/login"` for app="dashboard", type="feat", name="login"
+  - [x] `generate_names` produces branch_name `"feat/login"` for type="feat", name="login"
+  - [x] `generate_names` produces window_name `"dashboard-feat/login"`
+  - [x] Different task_type produces different worktree_name (collision prevention)
+  - [x] `worktree_path` defaults to `{repo_dir}.worktree/{worktree_name}/` when no config set
+  - [x] `worktree_path` substitutes `{app}`, `{type}`, `{name}` template variables from config
+  - [x] `get_app_name` extracts directory basename from CWD
+  - [x] `TmuxClient::new_window` constructs correct args: `-c <path>`
+  - [x] `TmuxClient::rename_window` passes window name correctly
+  - [x] `TmuxClient::close_current_window` switches before killing on multi-window session
+  - [x] `TmuxClient::get_prefix` parses `C-b` from `tmux show-options -g prefix` output
+  - [x] All tmux methods return `MatError::Tmux` on non-zero exit status
 - Test coverage target: >=80%
 - All tests must pass
 

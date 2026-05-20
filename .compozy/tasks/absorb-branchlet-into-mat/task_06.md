@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Create command rewrite
 type: backend
 complexity: high
@@ -37,12 +37,12 @@ Rewrite `handle_create_mode` to use the new `GitClient`, `TmuxClient`, `Config`,
 - MUST use `tmux.enabled` config to override auto-detection: `always` forces tmux path, `never` forces non-tmux path
 
 ## Subtasks
-- [ ] 06.1 Implement worktree + TMUX path using GitClient and TmuxClient
-- [ ] 06.2 Implement no-worktree path with stash guard and branch creation
-- [ ] 06.3 Implement worktree without TMUX path (new shell process fallback)
-- [ ] 06.4 Wire tmux detection (`$TMUX` env var) and config override (`tmux.enabled`)
-- [ ] 06.5 Format all output messages to match PRD User Experience examples
-- [ ] 06.6 Write unit tests for all three execution paths using MockRunner
+- [x] 06.1 Implement worktree + TMUX path using GitClient and TmuxClient
+- [x] 06.2 Implement no-worktree path with stash guard and branch creation
+- [x] 06.3 Implement worktree without TMUX path (new shell process fallback)
+- [x] 06.4 Wire tmux detection (`$TMUX` env var) and config override (`tmux.enabled`)
+- [x] 06.5 Format all output messages to match PRD User Experience examples
+- [x] 06.6 Write unit tests for all three execution paths using MockRunner
 
 ## Implementation Details
 
@@ -71,20 +71,20 @@ See TechSpec "Data Flow: Create Mode" diagram for the complete sequence. See PRD
 
 ## Tests
 - Unit tests (using MockRunner):
-  - [ ] Worktree+TMUX path: `worktree_add` called with correct branch, path, source; `tmux new-window` called with worktree path
-  - [ ] Worktree+TMUX path: `tmux rename-window` called with window name from naming module
-  - [ ] Worktree+TMUX path: `tmux set-buffer` called with `cd <path>` command
-  - [ ] No-worktree path: `stash_push` called with message `"mat:auto:feat/login"` when uncommitted changes exist
-  - [ ] No-worktree path: `checkout_b` called with branch name and source branch
-  - [ ] No-worktree path: disclaimer message printed to stdout
-  - [ ] No-worktree path: `worktree_add` is NOT called
-  - [ ] No-worktree path without uncommitted changes: `stash_push` is NOT called
-  - [ ] No-TMUX path: `worktree_add` called, tmux methods NOT called
-  - [ ] No-TMUX path: new shell process spawned with correct working directory
-  - [ ] `tmux.enabled = "never"` config forces no-TMUX path regardless of `$TMUX`
-  - [ ] `tmux.enabled = "always"` config forces TMUX path, fails if tmux not running
-  - [ ] `default_branch` from config used when `--source` not provided
-  - [ ] `worktree_add` failure returns `MatError::Git` and prints error message
+  - [x] Worktree+TMUX path: `worktree_add` called with correct branch, path, source; `tmux new-window` called with worktree path
+  - [x] Worktree+TMUX path: `tmux rename-window` called with window name from naming module
+  - [x] Worktree+TMUX path: `tmux set-buffer` called with `cd <path>` command
+  - [x] No-worktree path: `stash_push` called with message `"mat:auto:feat/login"` when uncommitted changes exist
+  - [x] No-worktree path: `checkout_b` called with branch name and source branch
+  - [x] No-worktree path: disclaimer message printed to stdout
+  - [x] No-worktree path: `worktree_add` is NOT called
+  - [x] No-worktree path without uncommitted changes: `stash_push` is NOT called
+  - [x] No-TMUX path: `worktree_add` called, tmux methods NOT called
+  - [x] No-TMUX path: new shell process spawned with correct working directory
+  - [x] `tmux.enabled = "never"` config forces no-TMUX path regardless of `$TMUX`
+  - [x] `tmux.enabled = "always"` config forces TMUX path, fails if tmux not running
+  - [x] `default_branch` from config used when `--source` not provided
+  - [x] `worktree_add` failure returns `MatError::Git` and prints error message
 - Test coverage target: >=80%
 - All tests must pass
 

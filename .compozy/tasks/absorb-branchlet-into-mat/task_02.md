@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: CommandRunner trait and GitClient
 type: backend
 complexity: high

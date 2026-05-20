@@ -1,5 +1,5 @@
 ---
-status: pending
+status: completed
 title: Close command rewrite
 type: backend
 complexity: high
@@ -42,12 +42,12 @@ Rewrite `handle_close_mode` to use `GitClient`, `TmuxClient`, and `Config`. Impl
 - `--no-merge` flag MUST skip merge step entirely: delete worktree only, optionally delete branch, copy merge command to buffer, close tmux window
 
 ## Subtasks
-- [ ] 07.1 Implement worktree identification via `GitClient::worktree_list` with CWD matching
-- [ ] 07.2 Implement auto-merge flow: checkout source, merge branch with config strategy, handle conflicts
-- [ ] 07.3 Implement cleanup flow: delete worktree, delete branch (conditionally), close tmux window
-- [ ] 07.4 Implement `--no-merge` path: skip merge, delete worktree, copy merge command to buffer
-- [ ] 07.5 Implement no-worktree close flow: stash pop, merge, branch delete
-- [ ] 07.6 Write unit tests for all close paths using MockRunner
+- [x] 07.1 Implement worktree identification via `GitClient::worktree_list` with CWD matching
+- [x] 07.2 Implement auto-merge flow: checkout source, merge branch with config strategy, handle conflicts
+- [x] 07.3 Implement cleanup flow: delete worktree, delete branch (conditionally), close tmux window
+- [x] 07.4 Implement `--no-merge` path: skip merge, delete worktree, copy merge command to buffer
+- [x] 07.5 Implement no-worktree close flow: stash pop, merge, branch delete
+- [x] 07.6 Write unit tests for all close paths using MockRunner
 
 ## Implementation Details
 
