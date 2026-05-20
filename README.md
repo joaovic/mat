@@ -1,23 +1,23 @@
 # mat - Multi-Agent Task CLI
 
-A CLI tool that creates a new TMUX window with a Git worktree for developing new features or tasks.
+A CLI tool that streamlines feature development using Git worktrees and TMUX integration.
 
 ## Overview
 
-`mat` (Multi-Agent Task) streamlines the workflow of creating a new branch and worktree for developing features. It:
+`mat` (Multi-Agent Task) manages your development workflow by creating isolated Git worktrees for new features or tasks, optionally integrated with TMUX. Inspired by tools in the Git worktree ecosystem, `mat` implements its own native workflow directly on top of Git commands.
 
-1. Checks prerequisites (TMUX running, Branchlet installed, Git repo)
-2. Creates a new Git worktree using Branchlet
-3. Opens a new TMUX window in the worktree directory
-4. Names the window following the pattern: `{app}-{type}/{name}`
-5. Copies a `cd` command to TMUX buffer for easy access from other panels
+It will:
+
+1. Check prerequisites (Git repo, optional TMUX)
+2. Create a new Git branch and worktree (or just a branch with `--no-worktree`)
+3. Open a new TMUX window in the worktree directory (when available)
+4. Name the window following the pattern: `{app}-{type}/{name}`
+5. Copy a `cd` command to TMUX buffer for easy access from other panels
 
 ## Requirements
 
-- **TMUX** - Must be running
-- **Branchlet** - Git worktree manager ([https://github.com/raghavpillai/branchlet](https://github.com/raghavpillai/branchlet))
-- **Git** - Current directory must be a Git repository
-- **Branchlet config** - `~/.branchlet/settings.json` must exist
+- **Git** — Current directory must be a Git repository
+- **TMUX** — Optional, for window management (auto-detected)
 
 ## Installation
 
@@ -34,19 +34,28 @@ sudo cp target/release/mat /usr/local/bin/mat
 
 ## Usage
 
+### Create a task
+
 ```bash
-mat <type> <name> [-s|--source <base-branch>]
+mat <type> <name> [OPTIONS]
 ```
 
-### Arguments
+#### Arguments
 
 | Argument | Description |
 |----------|-------------|
 | `type` | Task type (e.g., feat, fix, chore, refactor) |
 | `name` | Task name (e.g., increase-counter) |
-| `-s, --source` | Base branch to create worktree from (optional, defaults to current branch) |
 
-### Examples
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `-s, --source <branch>` | Base branch to create from (defaults to current branch) |
+| `--no-worktree` | Skip worktree creation, only create a branch |
+| `--use-tmux` | Force TMUX window creation even outside TMUX |
+
+#### Examples
 
 ```bash
 # Create feature from current branch
@@ -60,29 +69,93 @@ mat fix login-error
 
 # Create chore
 mat chore update-deps
+
+# Create without worktree (branch only)
+mat fix hotfix --no-worktree
 ```
 
-### Output Example
+#### Output Example
 
 ```
 ℹ Running prerequisite checks...
-✓ TMUX is running
-✓ Branchlet is installed
 ✓ Current directory is a git repository
-✓ Branchlet config exists
-ℹ Creating worktree: name=dashboard-increase-counter, source=main, branch=feat/increase-counter
-✓ Worktree created at: /path/to/project.worktree/dashboard-increase-counter
+ℹ Creating worktree: name=dashboard-feat/increase-counter, source=main, branch=feat/increase-counter
+✓ Worktree created at: /path/to/project.worktree/dashboard-feat/increase-counter
 ✓ TMUX window created
 ✓ Window renamed to: dashboard-feat/increase-counter
 ✓ CD command copied to TMUX buffer
 
-✓ Ready! Window 'dashboard-feat/increase-counter' is now open at: /path/to/project.worktree/dashboard-increase-counter
+✓ Ready! Window 'dashboard-feat/increase-counter' is now open at: /path/to/project.worktree/dashboard-feat/increase-counter
 
 💡 To cd into the new worktree from other TMUX panels:
   Press [Ctrl-a] then ] to paste the cd command
 ```
 
 > Note: The TMUX prefix (Ctrl-a, Ctrl-b, etc.) is automatically detected from your TMUX configuration.
+
+### Close a task
+
+```bash
+mat close [OPTIONS]
+```
+
+Closes the current task by checking out the source branch, optionally merging changes, removing the worktree, and deleting the feature branch.
+
+| Option | Description |
+|--------|-------------|
+| `--no-merge` | Skip merge on close |
+
+#### Examples
+
+```bash
+# Close and merge
+mat close
+
+# Close without merging
+mat close --no-merge
+```
+
+### Configuration
+
+`mat` supports two-tier configuration via TOML files:
+
+- **Global**: `~/.config/mat/config.toml`
+- **Project**: `.mat.toml` (in repo root)
+
+Project config overrides global config.
+
+#### Config commands
+
+```bash
+# List effective configuration with sources
+mat config list
+
+# Get a single config value
+mat config get <key>
+
+# Set a config value
+mat config set <key> <value>
+
+# Set globally
+mat config set --global <key> <value>
+```
+
+#### Available config keys
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `default_branch` | Default base branch | `main` |
+| `delete_branch` | Delete branch after close | `true` |
+| `merge_strategy` | `merge-commit` or `fast-forward` | `merge-commit` |
+| `worktree_root` | Custom worktree path template | `{repo}.worktree/{name}` |
+| `tmux.enabled` | `auto`, `always`, or `never` | `auto` |
+
+#### Example `.mat.toml`
+
+```toml
+default_branch = "develop"
+merge_strategy = "fast-forward"
+```
 
 ## Window Naming Convention
 
@@ -93,6 +166,10 @@ Windows are named following this pattern:
 ```
 
 Example: For app `dashboard`, running `mat feat increase-counter`, the window will be named `dashboard-feat/increase-counter`.
+
+## Inspirations
+
+The workflow design was inspired by ideas from the Git worktree tooling ecosystem, particularly the ergonomics of managing per-feature worktrees. `mat` implements its own native Git worktree management and adds integrated configuration, auto-merge on close, and flexible TMUX handling.
 
 ## License
 

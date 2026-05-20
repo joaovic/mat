@@ -507,6 +507,11 @@ mod tests {
     #[test]
     fn test_should_use_tmux_auto_without_flag_and_no_tmux_env() {
         let config = config_tmux(TmuxMode::Auto);
+        let old_tmux = env::var("TMUX").ok();
+        env::remove_var("TMUX");
         assert!(!should_use_tmux(&config, false));
+        if let Some(val) = old_tmux {
+            env::set_var("TMUX", val);
+        }
     }
 }
