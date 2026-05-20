@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::config::{Config, TmuxMode};
-use crate::display::{print_info, print_success, print_tip, print_warning};
+use crate::display::{print_info, print_success, print_warning};
 use crate::error::MatError;
 use crate::git::{CommandRunner, GitClient};
 use crate::naming;
@@ -102,11 +102,12 @@ fn handle_worktree_tmux<R: CommandRunner>(
     git.worktree_add(&path_str, &names.branch_name, source_branch)?;
     print_success(&format!("Worktree created at {}", path_str));
 
-    tmux.new_window(&path_str)?;
+    let window_index = tmux.new_window(&path_str)?;
     tmux.rename_window(&names.window_name)?;
 
-    let cd_command = format!("cd {}", path_str);
-    tmux.set_buffer(&cd_command)?;
+    // Ensure the new window's first pane is in the worktree.
+    // Splits from this pane will inherit its cwd, so all new panels stay in the worktree.
+    let _ = tmux.send_keys(&format!("{}.0", window_index), &format!("cd {}", path_str));
 
     println!();
     print_success(&format!(
@@ -115,12 +116,142 @@ fn handle_worktree_tmux<R: CommandRunner>(
     ));
     println!("  {}", path_str);
 
-    println!();
-    print_tip("To cd into the new worktree from other tmux panels:");
-    let prefix = tmux.get_prefix().unwrap_or_else(|_| "Ctrl-b".to_string());
-    println!("  Press {} then ] to paste the cd command", prefix);
-
     Ok(())
+}
+
+fn try_open_new_terminal_tab(path: &std::path::Path) -> bool {
+    if std::env::var("MAT_SKIP_TERMINAL").is_ok() {
+        return false;
+    }
+
+    let path_str = path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+
+        if term_program == "Apple_Terminal" {
+            let script = format!(
+                r#"tell application "Terminal"
+                    activate
+                    if not (exists window 1) then
+                        do script "cd {path}"
+                    else
+                        tell front window
+                            set newTab to make new tab
+                            set selected to newTab
+                            do script "cd {path}" in newTab
+                        end tell
+                    end if
+                end tell"#
+            );
+            if Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        } else if term_program == "iTerm.app" {
+            let script = format!(
+                r#"tell application "iTerm"
+                    tell current window
+                        create tab with default profile
+                        tell current session
+                            write text "cd {path}"
+                        end tell
+                    end tell
+                end tell"#
+            );
+            if Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+
+        // Fallback: open new Terminal window
+        if Command::new("open")
+            .args(["-a", "Terminal", &path_str])
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Only attempt GUI terminals when a display server appears available
+        let has_display = std::env::var("DISPLAY").is_ok()
+            || std::env::var("WAYLAND_DISPLAY").is_ok();
+        if !has_display {
+            return false;
+        }
+
+        // Try opening a tab in the current terminal first
+        let tab_candidates: [(&str, Vec<&str>); 3] = [
+            ("gnome-terminal", vec!["--tab", "--working-directory", &path_str]),
+            ("konsole", vec!["--new-tab", "--workdir", &path_str]),
+            ("xfce4-terminal", vec!["--tab", "--working-directory", &path_str]),
+        ];
+
+        for (cmd, args) in &tab_candidates {
+            if Command::new(cmd).args(args).spawn().is_ok() {
+                return true;
+            }
+        }
+
+        // WezTerm tab (works when inside a WezTerm instance)
+        if Command::new("wezterm")
+            .args(["cli", "spawn", "--cwd", &path_str])
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+
+        // Kitty tab (requires remote control)
+        if Command::new("kitty")
+            .args(["@", "launch", "--type=tab", "--cwd", &path_str])
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+
+        // Window fallbacks
+        let window_candidates: [(&str, Vec<&str>); 5] = [
+            ("gnome-terminal", vec!["--working-directory", &path_str]),
+            ("konsole", vec!["--workdir", &path_str]),
+            ("xfce4-terminal", vec!["--working-directory", &path_str]),
+            ("alacritty", vec!["--working-directory", &path_str]),
+            ("kitty", vec!["--directory", &path_str]),
+        ];
+
+        for (cmd, args) in &window_candidates {
+            if Command::new(cmd).args(args).spawn().is_ok() {
+                return true;
+            }
+        }
+
+        // WezTerm window
+        if Command::new("wezterm")
+            .args(["start", "--cwd", &path_str])
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn handle_worktree_shell<R: CommandRunner>(
@@ -139,16 +270,21 @@ fn handle_worktree_shell<R: CommandRunner>(
     git.worktree_add(&path_str, &names.branch_name, source_branch)?;
     print_success(&format!("Worktree created at {}", path_str));
 
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let mut child = Command::new(&shell)
-        .current_dir(&names.worktree_path)
-        .spawn()
-        .map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
+    if try_open_new_terminal_tab(&names.worktree_path) {
+        print_success("Opened new terminal tab in worktree directory");
+        println!("  {}", path_str);
+    } else {
+        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut child = Command::new(&shell)
+            .current_dir(&names.worktree_path)
+            .spawn()
+            .map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
 
-    print_success("Opening new shell in worktree directory...");
-    println!("  (Type 'exit' to return to your original directory)");
+        print_success("Opening new shell in worktree directory...");
+        println!("  (Type 'exit' to return to your original directory)");
 
-    child.wait().map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
+        child.wait().map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
+    }
 
     Ok(())
 }
@@ -189,7 +325,9 @@ mod tests {
         let git = GitClient::new(mock);
         let tmux = TmuxClient::new(MockRunner::new());
         let prev_shell = env::var("SHELL").ok();
+        let prev_skip_terminal = env::var("MAT_SKIP_TERMINAL").ok();
         env::set_var("SHELL", "true");
+        env::set_var("MAT_SKIP_TERMINAL", "1");
 
         let app_name = APP_NAME;
         let result = handle_create("fix", "typo", None, false, false, &config, &git, &tmux, app_name, &repo_dir);
@@ -197,6 +335,10 @@ mod tests {
         match prev_shell {
             Some(s) => env::set_var("SHELL", s),
             None => env::remove_var("SHELL"),
+        }
+        match prev_skip_terminal {
+            Some(s) => env::set_var("MAT_SKIP_TERMINAL", s),
+            None => env::remove_var("MAT_SKIP_TERMINAL"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -232,8 +374,7 @@ mod tests {
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", &format!("cd {}", tree_path)], ok_output(""));
-        mock.add_response("tmux", &["show-options", "-g", "prefix"], ok_output("prefix C-b\n"));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
 
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
@@ -250,8 +391,7 @@ mod tests {
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", &format!("cd {}", tree_path)], ok_output(""));
-        mock.add_response("tmux", &["show-options", "-g", "prefix"], ok_output("prefix C-b\n"));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
 
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
@@ -294,8 +434,7 @@ mod tests {
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", &format!("cd {}", tree_path)], ok_output(""));
-        mock.add_response("tmux", &["show-options", "-g", "prefix"], ok_output("prefix C-b\n"));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
 
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
@@ -403,13 +542,19 @@ mod tests {
         let git = GitClient::new(mock);
         let tmux = TmuxClient::new(MockRunner::new());
         let prev_shell = env::var("SHELL").ok();
+        let prev_skip_terminal = env::var("MAT_SKIP_TERMINAL").ok();
         env::set_var("SHELL", "true");
+        env::set_var("MAT_SKIP_TERMINAL", "1");
 
         let result = handle_create("feat", "login", None, false, true, &config, &git, &tmux, APP_NAME, &repo_dir);
 
         match prev_shell {
             Some(s) => env::set_var("SHELL", s),
             None => env::remove_var("SHELL"),
+        }
+        match prev_skip_terminal {
+            Some(s) => env::set_var("MAT_SKIP_TERMINAL", s),
+            None => env::remove_var("MAT_SKIP_TERMINAL"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -424,8 +569,7 @@ mod tests {
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", &format!("cd {}", tree_path)], ok_output(""));
-        mock.add_response("tmux", &["show-options", "-g", "prefix"], ok_output("prefix C-b\n"));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
 
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
@@ -467,8 +611,7 @@ mod tests {
         mock.add_response("git", &["worktree", "add", "-b", "chore/update", &tree_path, "develop"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-chore/update"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", &format!("cd {}", tree_path)], ok_output(""));
-        mock.add_response("tmux", &["show-options", "-g", "prefix"], ok_output("prefix C-b\n"));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
 
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);

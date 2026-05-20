@@ -66,6 +66,11 @@ impl<R: CommandRunner> TmuxClient<R> {
         Ok(())
     }
 
+    pub fn send_keys(&self, target: &str, keys: &str) -> Result<(), MatError> {
+        self.run_tmux(&["send-keys", "-t", target, keys, "Enter"])?;
+        Ok(())
+    }
+
     pub fn display_message(&self, format: &str) -> Result<String, MatError> {
         let output = self.run_tmux(&["display-message", "-p", format])?;
         Ok(output.stdout.trim().to_string())
@@ -205,6 +210,18 @@ mod tests {
         );
         let tmux = client_with(mock);
         tmux.set_buffer("cd /path").unwrap();
+    }
+
+    #[test]
+    fn test_send_keys_passes_target_and_keys() {
+        let mut mock = mock_tmux();
+        mock.add_response(
+            "tmux",
+            &["send-keys", "-t", "%0", "cd /path", "Enter"],
+            ok_output(""),
+        );
+        let tmux = client_with(mock);
+        tmux.send_keys("%0", "cd /path").unwrap();
     }
 
     #[test]

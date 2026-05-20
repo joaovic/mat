@@ -1,11 +1,20 @@
+use std::env;
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{Config, TmuxMode};
 use crate::display::{print_error, print_info, print_success, print_tip, print_warning};
 use crate::error::MatError;
 use crate::config::MergeStrategy;
 use crate::git::{CommandRunner, GitClient};
 use crate::tmux::TmuxClient;
+
+fn should_use_tmux(config: &Config) -> bool {
+    match config.tmux.enabled {
+        TmuxMode::Never => false,
+        TmuxMode::Always => true,
+        TmuxMode::Auto => env::var("TMUX").is_ok(),
+    }
+}
 
 fn merge_strategy_name(strategy: &MergeStrategy) -> &'static str {
     match strategy {
@@ -144,13 +153,17 @@ pub fn handle_close<R: CommandRunner>(
         print_success("Branch deleted");
     }
 
-    if no_merge {
+    let use_tmux = should_use_tmux(config);
+
+    if no_merge && use_tmux {
         let merge_cmd = format!("git merge {}", branch_name);
         let _ = tmux.set_buffer(&merge_cmd);
     }
 
-    tmux.close_current_window()?;
-    print_success("TMUX window closed");
+    if use_tmux {
+        tmux.close_current_window()?;
+        print_success("TMUX window closed");
+    }
 
     println!();
     if merge_success {
@@ -292,6 +305,38 @@ branch refs/heads/feat/login
         PathBuf::from("/repo")
     }
 
+    fn run_with_tmux_env<F, R>(f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let old = std::env::var("TMUX").ok();
+        std::env::set_var("TMUX", "/tmp/test-tmux");
+        let result = f();
+        match old {
+            Some(v) => std::env::set_var("TMUX", v),
+            None => std::env::remove_var("TMUX"),
+        }
+        result
+    }
+
+    fn config_tmux_never() -> Config {
+        Config {
+            tmux: crate::config::TmuxConfig {
+                enabled: TmuxMode::Never,
+            },
+            ..Config::default()
+        }
+    }
+
+    fn config_tmux_always() -> Config {
+        Config {
+            tmux: crate::config::TmuxConfig {
+                enabled: TmuxMode::Always,
+            },
+            ..Config::default()
+        }
+    }
+
     // ── Uncommitted changes ──────────────────────────────────────
 
     #[test]
@@ -328,7 +373,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -345,7 +392,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = config_no_delete();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -363,7 +412,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = config_no_delete();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -382,7 +433,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -399,7 +452,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = config_ff();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -452,7 +507,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(true, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -472,7 +529,9 @@ branch refs/heads/feat/login
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
 
-        let result = handle_close(true, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -490,7 +549,9 @@ branch refs/heads/feat/login
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(true, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -535,7 +596,9 @@ branch refs/heads/main
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_repo());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
+        });
         assert!(result.is_ok());
     }
 
@@ -616,7 +679,9 @@ branch refs/heads/main
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_repo());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
+        });
         assert!(result.is_ok());
     }
 
@@ -651,7 +716,9 @@ branch refs/heads/main
         let tmux = TmuxClient::new(mock);
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_repo());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
+        });
         assert!(result.is_ok());
     }
 
@@ -669,6 +736,44 @@ branch refs/heads/main
         let git = GitClient::new(mock.clone());
         let tmux = TmuxClient::new(mock);
         let config = base_config();
+
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
+        assert!(result.is_ok());
+    }
+
+    // ── Tmux guard behavior ─────────────────────────────────────
+
+    #[test]
+    fn test_close_skips_tmux_when_config_never() {
+        let mut mock = mock_git();
+        setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
+        default_branch_mocks(&mut mock);
+        successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
+        // No tmux mocks needed — tmux should not be touched
+
+        let git = GitClient::new(mock);
+        let tmux = TmuxClient::new(MockRunner::new());
+        let config = config_tmux_never();
+
+        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_close_uses_tmux_when_config_always() {
+        let mut mock = mock_git();
+        setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
+        default_branch_mocks(&mut mock);
+        successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
+        tmux_close_mocks(&mut mock);
+
+        let git = GitClient::new(mock.clone());
+        let tmux = TmuxClient::new(mock);
+        let config = config_tmux_always();
 
         let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
         assert!(result.is_ok());
@@ -700,7 +805,9 @@ branch refs/heads/main
         let tmux = TmuxClient::new(mock);
         let config = config_no_delete();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 }

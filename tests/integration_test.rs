@@ -323,7 +323,8 @@ fn test_close_no_worktree_auto_merge() {
     run_git(&["add", "."], repo.path());
     run_git(&["commit", "-m", "Feature work"], repo.path());
 
-    // Close from repo (no-worktree path) — tmux will fail but git ops should complete
+    // Close from repo (no-worktree path) — tmux is gracefully skipped when
+    // not inside a tmux session, so the command should succeed.
     let close_out = run_mat(&["close"], repo.path(), None, None, None);
 
     // Verify merge happened: the commit should be in main
@@ -352,16 +353,11 @@ fn test_close_no_worktree_auto_merge() {
         branch_stdout
     );
 
-    // Close command itself fails due to missing tmux session
+    // Close should succeed (tmux is skipped when not in a tmux session)
     assert!(
-        !close_out.status.success(),
-        "expected close to fail due to tmux"
-    );
-    let stderr = String::from_utf8_lossy(&close_out.stderr);
-    assert!(
-        stderr.to_lowercase().contains("tmux"),
-        "expected tmux error:\n{}",
-        stderr
+        close_out.status.success(),
+        "close should succeed when tmux is not active: {}",
+        String::from_utf8_lossy(&close_out.stderr)
     );
 }
 

@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{error::ErrorKind, Parser, Subcommand};
 
 use crate::error::MatError;
 
@@ -26,7 +26,7 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.1.1")]
+#[command(name = "mat", version = "0.2.0")]
 #[command(about = "Multi-Agent Task - Create TMUX window + Git worktree for new features", long_about = None)]
 struct Cli {
     #[arg(help = "Task type (e.g., feat, fix, chore, refactor)")]
@@ -86,9 +86,18 @@ enum ConfigCommands {
 }
 
 pub fn parse() -> Result<Command, MatError> {
-    let cli = Cli::try_parse().map_err(|e| MatError::Validation {
-        message: e.to_string(),
-    })?;
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            if matches!(e.kind(), ErrorKind::DisplayVersion | ErrorKind::DisplayHelp) {
+                eprintln!("{e}");
+                std::process::exit(0);
+            }
+            return Err(MatError::Validation {
+                message: e.to_string(),
+            });
+        }
+    };
     cli_to_command(cli)
 }
 
