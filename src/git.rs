@@ -153,11 +153,24 @@ impl<R: CommandRunner> GitClient<R> {
             .runner
             .run("git", &["worktree", "list", "--porcelain"])?;
 
+        // --git-common-dir returns the shared .git directory, whose parent is the main repo root.
+        // This works correctly even when called from a secondary worktree,
+        // unlike --show-toplevel which returns the current worktree path.
+        // Note: --git-common-dir may return a relative path (e.g., ".git") from the main repo,
+        // so we resolve relative paths against the current directory.
         let repo_root = self
             .runner
-            .run("git", &["rev-parse", "--show-toplevel"])
+            .run("git", &["rev-parse", "--git-common-dir"])
             .ok()
-            .map(|o| PathBuf::from(o.stdout.trim().to_string()));
+            .and_then(|o| {
+                let path = PathBuf::from(o.stdout.trim());
+                let parent = path.parent().map(|p| p.to_path_buf())?;
+                if parent.is_absolute() {
+                    Some(parent)
+                } else {
+                    std::env::current_dir().ok().map(|cwd| cwd.join(&parent))
+                }
+            });
 
         let mut worktrees = Vec::new();
         let mut current_path: Option<PathBuf> = None;
@@ -244,8 +257,25 @@ impl<R: CommandRunner> GitClient<R> {
         Ok(())
     }
 
+    pub fn merge_from(&self, branch: &str, strategy: MergeStrategy, dir: &str) -> Result<(), MatError> {
+        match strategy {
+            MergeStrategy::MergeCommit => {
+                self.runner.run("git", &["-C", dir, "merge", "--no-ff", branch])?;
+            }
+            MergeStrategy::FastForward => {
+                self.runner.run("git", &["-C", dir, "merge", "--ff-only", branch])?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn branch_delete(&self, branch: &str) -> Result<(), MatError> {
         self.runner.run("git", &["branch", "-d", branch])?;
+        Ok(())
+    }
+
+    pub fn branch_delete_from(&self, branch: &str, dir: &str) -> Result<(), MatError> {
+        self.runner.run("git", &["-C", dir, "branch", "-d", branch])?;
         Ok(())
     }
 
@@ -266,6 +296,11 @@ impl<R: CommandRunner> GitClient<R> {
 
     pub fn abort_merge(&self) -> Result<(), MatError> {
         self.runner.run("git", &["merge", "--abort"])?;
+        Ok(())
+    }
+
+    pub fn abort_merge_from(&self, dir: &str) -> Result<(), MatError> {
+        self.runner.run("git", &["-C", dir, "merge", "--abort"])?;
         Ok(())
     }
 }
@@ -424,8 +459,8 @@ branch refs/heads/feat/login
         );
         mock.add_response(
             "git",
-            &["rev-parse", "--show-toplevel"],
-            ok_output("/home/user/project\n"),
+            &["rev-parse", "--git-common-dir"],
+            ok_output("/home/user/project/.git\n"),
         );
         let git = client_with(mock);
         let worktrees = git.worktree_list().unwrap();
@@ -463,8 +498,8 @@ detached
         );
         mock.add_response(
             "git",
-            &["rev-parse", "--show-toplevel"],
-            ok_output("/home/user/project\n"),
+            &["rev-parse", "--git-common-dir"],
+            ok_output("/home/user/project/.git\n"),
         );
         let git = client_with(mock);
         let worktrees = git.worktree_list().unwrap();
@@ -517,6 +552,30 @@ detached
     }
 
     #[test]
+    fn test_merge_from_uses_C_flag_with_merge_commit() {
+        let mut mock = mock_git();
+        mock.add_response("git", &["-C", "/repo", "merge", "--no-ff", "feat/login"], ok_output(""));
+        let git = client_with(mock);
+        git.merge_from("feat/login", MergeStrategy::MergeCommit, "/repo").unwrap();
+    }
+
+    #[test]
+    fn test_merge_from_uses_C_flag_with_fast_forward() {
+        let mut mock = mock_git();
+        mock.add_response("git", &["-C", "/repo", "merge", "--ff-only", "feat/login"], ok_output(""));
+        let git = client_with(mock);
+        git.merge_from("feat/login", MergeStrategy::FastForward, "/repo").unwrap();
+    }
+
+    #[test]
+    fn test_abort_merge_from_uses_C_flag() {
+        let mut mock = mock_git();
+        mock.add_response("git", &["-C", "/repo", "merge", "--abort"], ok_output(""));
+        let git = client_with(mock);
+        git.abort_merge_from("/repo").unwrap();
+    }
+
+    #[test]
     fn test_stash_push_uses_mat_auto_prefix() {
         let mut mock = mock_git();
         mock.add_response(
@@ -560,6 +619,14 @@ detached
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         let git = client_with(mock);
         git.branch_delete("feat/login").unwrap();
+    }
+
+    #[test]
+    fn test_branch_delete_from_uses_C_flag() {
+        let mut mock = mock_git();
+        mock.add_response("git", &["-C", "/repo", "branch", "-d", "feat/login"], ok_output(""));
+        let git = client_with(mock);
+        git.branch_delete_from("feat/login", "/repo").unwrap();
     }
 
     #[test]
@@ -663,8 +730,8 @@ branch refs/heads/main
         );
         mock.add_response(
             "git",
-            &["rev-parse", "--show-toplevel"],
-            ok_output("/repo\n"),
+            &["rev-parse", "--git-common-dir"],
+            ok_output("/repo/.git\n"),
         );
         let git = client_with(mock);
         let worktrees = git.worktree_list().unwrap();
@@ -696,8 +763,8 @@ branch refs/heads/fix/b
         );
         mock.add_response(
             "git",
-            &["rev-parse", "--show-toplevel"],
-            ok_output("/repo\n"),
+            &["rev-parse", "--git-common-dir"],
+            ok_output("/repo/.git\n"),
         );
         let git = client_with(mock);
         let worktrees = git.worktree_list().unwrap();

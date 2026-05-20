@@ -297,11 +297,8 @@ fn test_create_no_worktree_with_uncommitted_changes() {
 // ──────────────────────────────────────────────
 //  Close flow (no-worktree mode)
 //
-//  NOTE: Close-from-worktree is not tested because
-//  `git checkout <source>` fails from within a worktree
-//  when the source branch is checked out in the main repo.
-//  The no-worktree path avoids this by staying in the
-//  main repo.
+//  Close-from-worktree is now supported by running the merge
+//  from the main worktree via `git -C <main> merge <branch>`.
 // ──────────────────────────────────────────────
 
 #[test]
@@ -503,6 +500,116 @@ fn test_close_no_worktree_merge_conflict() {
     run_git(&["checkout", "main"], repo.path());
     try_git(&["branch", "-D", "feat/nw-conflict"], repo.path());
     run_git(&["reset", "--hard", "HEAD~1"], repo.path()); // undo the main conflicting commit
+}
+
+#[test]
+fn test_close_from_worktree_auto_merge() {
+    let repo = setup_git_repo();
+    let aname = app_name(repo.path());
+
+    // Create a feature worktree
+    let out = run_mat(&["feat", "wt-merge"], repo.path(), Some("true"), None, None);
+    assert!(out.status.success(), "create failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let wt = worktree_path(repo.path(), &aname, "feat", "wt-merge");
+    assert!(wt.exists(), "Worktree not created");
+
+    // Make a change and commit in the worktree
+    std::fs::write(wt.join("work.txt"), "data").unwrap();
+    run_git(&["add", "."], &wt);
+    run_git(&["commit", "-m", "Feature work"], &wt);
+
+    // Close from the worktree
+    let close_out = run_mat(&["close"], &wt, None, None, None);
+    assert!(
+        close_out.status.success(),
+        "close from worktree failed: {}",
+        String::from_utf8_lossy(&close_out.stderr)
+    );
+
+    // Verify merge happened: the commit should be in main
+    let log_out = Command::new("git")
+        .args(["log", "--oneline", "main"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    let log_stdout = String::from_utf8_lossy(&log_out.stdout);
+    assert!(
+        log_stdout.contains("Feature work"),
+        "Merge commit not found in main log:\n{}",
+        log_stdout
+    );
+
+    // Verify branch was deleted (default: delete_branch=true)
+    let branch_out = Command::new("git")
+        .args(["branch", "--list", "feat/wt-merge"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    let branch_stdout = String::from_utf8_lossy(&branch_out.stdout);
+    assert!(
+        !branch_stdout.contains("feat/wt-merge"),
+        "Branch should have been deleted:\n{}",
+        branch_stdout
+    );
+
+    // Verify worktree was removed
+    let wt_out = Command::new("git")
+        .args(["worktree", "list"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    let wt_stdout = String::from_utf8_lossy(&wt_out.stdout);
+    assert!(
+        !wt_stdout.contains(&wt.to_string_lossy().to_string()),
+        "Worktree should have been removed:\n{}",
+        wt_stdout
+    );
+}
+
+#[test]
+fn test_close_from_worktree_merge_conflict() {
+    let repo = setup_git_repo();
+    let aname = app_name(repo.path());
+
+    // Create a base file in main
+    std::fs::write(repo.path().join("shared.txt"), "base").unwrap();
+    run_git(&["add", "."], repo.path());
+    run_git(&["commit", "-m", "Add shared.txt"], repo.path());
+
+    // Create a feature worktree
+    let out = run_mat(&["feat", "wt-conflict"], repo.path(), Some("true"), None, None);
+    assert!(out.status.success(), "create failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let wt = worktree_path(repo.path(), &aname, "feat", "wt-conflict");
+
+    // Make a conflicting change in the worktree
+    std::fs::write(wt.join("shared.txt"), "feature change").unwrap();
+    run_git(&["add", "."], &wt);
+    run_git(&["commit", "-m", "Feature change"], &wt);
+
+    // Make a conflicting change in main
+    std::fs::write(repo.path().join("shared.txt"), "main change").unwrap();
+    run_git(&["add", "."], repo.path());
+    run_git(&["commit", "-m", "Main change"], repo.path());
+
+    // Close should fail with merge conflict
+    let close_out = run_mat(&["close"], &wt, None, None, None);
+    assert!(
+        !close_out.status.success(),
+        "close should fail with merge conflict"
+    );
+    let stderr = String::from_utf8_lossy(&close_out.stderr);
+    assert!(
+        stderr.to_lowercase().contains("conflict") || stderr.contains("CONFLICT"),
+        "Expected conflict error:\n{}",
+        stderr
+    );
+
+    // Cleanup
+    run_git(&["reset", "--hard", "HEAD~1"], repo.path()); // undo main conflicting commit
+    try_git(&["worktree", "remove", "--force", &wt.to_string_lossy()], repo.path());
+    try_git(&["branch", "-D", "feat/wt-conflict"], repo.path());
 }
 
 // ──────────────────────────────────────────────
