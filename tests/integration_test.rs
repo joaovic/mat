@@ -118,7 +118,7 @@ fn test_create_worktree_shell_path() {
     let aname = app_name(repo.path());
 
     let output = run_mat(
-        &["feat", "test-feature"],
+        &["create", "feat", "test-feature"],
         repo.path(),
         Some("true"),
         None,
@@ -167,14 +167,14 @@ fn test_create_worktree_naming_different_types() {
     let repo = setup_git_repo();
     let aname = app_name(repo.path());
 
-    let out1 = run_mat(&["feat", "login"], repo.path(), Some("true"), None, None);
+    let out1 = run_mat(&["create", "feat", "login"], repo.path(), Some("true"), None, None);
     assert!(
         out1.status.success(),
         "first create failed: {}",
         String::from_utf8_lossy(&out1.stderr)
     );
 
-    let out2 = run_mat(&["fix", "login"], repo.path(), Some("true"), None, None);
+    let out2 = run_mat(&["create", "fix", "login"], repo.path(), Some("true"), None, None);
     assert!(
         out2.status.success(),
         "second create failed: {}",
@@ -205,7 +205,7 @@ fn test_create_worktree_naming_different_types() {
 fn test_create_no_worktree() {
     let repo = setup_git_repo();
 
-    let output = run_mat(&["--no-worktree", "fix", "test-bug"], repo.path(), None, None, None);
+    let output = run_mat(&["create", "--no-worktree", "fix", "test-bug"], repo.path(), None, None, None);
 
     assert!(
         output.status.success(),
@@ -251,7 +251,7 @@ fn test_create_no_worktree_with_uncommitted_changes() {
     std::fs::write(repo.path().join("tracked.txt"), "modified").unwrap();
 
     let output = run_mat(
-        &["--no-worktree", "fix", "bug-fix"],
+        &["create", "--no-worktree", "fix", "bug-fix"],
         repo.path(),
         None,
         None,
@@ -307,7 +307,7 @@ fn test_close_no_worktree_auto_merge() {
 
     // Create a branch with --no-worktree
     let out = run_mat(
-        &["--no-worktree", "feat", "nw-merge"],
+        &["create", "--no-worktree", "feat", "nw-merge"],
         repo.path(),
         None,
         None,
@@ -363,7 +363,7 @@ fn test_close_no_worktree_no_merge() {
     let repo = setup_git_repo();
 
     let out = run_mat(
-        &["--no-worktree", "feat", "nw-nomerge"],
+        &["create", "--no-worktree", "feat", "nw-nomerge"],
         repo.path(),
         None,
         None,
@@ -414,7 +414,7 @@ fn test_close_no_worktree_with_uncommitted_changes() {
     let repo = setup_git_repo();
 
     let out = run_mat(
-        &["--no-worktree", "feat", "nw-dirty"],
+        &["create", "--no-worktree", "feat", "nw-dirty"],
         repo.path(),
         None,
         None,
@@ -460,7 +460,7 @@ fn test_close_no_worktree_merge_conflict() {
 
     // Create feature branch and make a conflicting change
     let out = run_mat(
-        &["--no-worktree", "feat", "nw-conflict"],
+        &["create", "--no-worktree", "feat", "nw-conflict"],
         repo.path(),
         None,
         None,
@@ -508,7 +508,7 @@ fn test_close_from_worktree_auto_merge() {
     let aname = app_name(repo.path());
 
     // Create a feature worktree
-    let out = run_mat(&["feat", "wt-merge"], repo.path(), Some("true"), None, None);
+    let out = run_mat(&["create", "feat", "wt-merge"], repo.path(), Some("true"), None, None);
     assert!(out.status.success(), "create failed: {}", String::from_utf8_lossy(&out.stderr));
 
     let wt = worktree_path(repo.path(), &aname, "feat", "wt-merge");
@@ -578,7 +578,7 @@ fn test_close_from_worktree_merge_conflict() {
     run_git(&["commit", "-m", "Add shared.txt"], repo.path());
 
     // Create a feature worktree
-    let out = run_mat(&["feat", "wt-conflict"], repo.path(), Some("true"), None, None);
+    let out = run_mat(&["create", "feat", "wt-conflict"], repo.path(), Some("true"), None, None);
     assert!(out.status.success(), "create failed: {}", String::from_utf8_lossy(&out.stderr));
 
     let wt = worktree_path(repo.path(), &aname, "feat", "wt-conflict");
@@ -724,7 +724,7 @@ fn test_config_set_global_isolated() {
 fn test_create_outside_git_repo() {
     let outside = tempfile::TempDir::new().expect("failed to create temp dir");
 
-    let output = run_mat(&["feat", "login"], outside.path(), None, None, None);
+    let output = run_mat(&["create", "feat", "login"], outside.path(), None, None, None);
     assert!(
         !output.status.success(),
         "create outside git repo should fail"
@@ -747,7 +747,7 @@ fn test_tmux_unset_uses_shell_path() {
     let aname = app_name(repo.path());
 
     let output = run_mat(
-        &["feat", "shell-path"],
+        &["create", "feat", "shell-path"],
         repo.path(),
         Some("true"),
         None,
@@ -770,7 +770,7 @@ fn test_tmux_set_tries_tmux_and_fails() {
     let aname = app_name(repo.path());
 
     let output = run_mat(
-        &["feat", "tmux-fail"],
+        &["create", "feat", "tmux-fail"],
         repo.path(),
         None,
         Some("/tmp/tmux-fake"),

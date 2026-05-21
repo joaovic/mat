@@ -274,11 +274,6 @@ impl<R: CommandRunner> GitClient<R> {
         Ok(())
     }
 
-    pub fn branch_delete_from(&self, branch: &str, dir: &str) -> Result<(), MatError> {
-        self.runner.run("git", &["-C", dir, "branch", "-d", branch])?;
-        Ok(())
-    }
-
     pub fn stash_push(&self, message: &str, include_untracked: bool) -> Result<(), MatError> {
         let stash_msg = format!("mat:auto:{}", message);
         let mut args = vec!["stash", "push", "-m", stash_msg.as_str()];
@@ -302,6 +297,16 @@ impl<R: CommandRunner> GitClient<R> {
     pub fn abort_merge_from(&self, dir: &str) -> Result<(), MatError> {
         self.runner.run("git", &["-C", dir, "merge", "--abort"])?;
         Ok(())
+    }
+
+    pub fn config_set(&self, key: &str, value: &str) -> Result<(), MatError> {
+        self.runner.run("git", &["config", key, value])?;
+        Ok(())
+    }
+
+    pub fn config_get(&self, key: &str) -> Result<String, MatError> {
+        let output = self.runner.run("git", &["config", "--get", key])?;
+        Ok(output.stdout.trim().to_string())
     }
 }
 
@@ -619,14 +624,6 @@ detached
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         let git = client_with(mock);
         git.branch_delete("feat/login").unwrap();
-    }
-
-    #[test]
-    fn test_branch_delete_from_uses_C_flag() {
-        let mut mock = mock_git();
-        mock.add_response("git", &["-C", "/repo", "branch", "-d", "feat/login"], ok_output(""));
-        let git = client_with(mock);
-        git.branch_delete_from("feat/login", "/repo").unwrap();
     }
 
     #[test]

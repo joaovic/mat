@@ -36,10 +36,6 @@ sudo cp target/release/mat /usr/local/bin/mat
 
 ### Create a task
 
-```bash
-mat <type> <name> [OPTIONS]
-```
-
 #### Arguments
 
 | Argument | Description |
@@ -59,19 +55,19 @@ mat <type> <name> [OPTIONS]
 
 ```bash
 # Create feature from current branch
-mat feat increase-counter
+mat create feat increase-counter
 
 # Create feature from specific branch
-mat feat increase-counter -s develop
+mat create feat increase-counter -s develop
 
 # Create bugfix
-mat fix login-error
+mat create fix login-error
 
 # Create chore
-mat chore update-deps
+mat create chore update-deps
 
 # Create without worktree (branch only)
-mat fix hotfix --no-worktree
+mat create fix hotfix --no-worktree
 ```
 
 #### Output Example

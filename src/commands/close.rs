@@ -140,28 +140,40 @@ pub fn handle_close<R: CommandRunner>(
         (branch, None)
     };
 
-    let source_branch = git
-        .default_branch()
-        .unwrap_or_else(|_| config.default_branch.clone());
+    let source_branch = {
+        let mat_source_key = format!("branch.{}.mat-source", branch_name);
+        git.config_get(&mat_source_key)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                git.default_branch()
+                    .unwrap_or_else(|_| config.default_branch.clone())
+            })
+    };
 
     print_info(&format!(
         "Current branch: {} (from {})",
         branch_name, source_branch
     ));
 
-    let main_worktree = worktrees
+    let main_worktree_path = worktrees
         .iter()
         .find(|wt| wt.is_main)
         .map(|wt| wt.path.to_string_lossy().to_string());
 
-    // Only merge from main worktree when closing from a secondary worktree.
-    // When in the main repo, use the standard checkout + merge path.
-    let main_worktree_for_merge = if maybe_worktree_path.is_some() {
-        main_worktree.as_deref()
-    } else {
-        None
-    };
+    // Step 1: Change to main worktree directory first (so shell ends up in valid directory)
+    if let Some(ref main_path) = main_worktree_path {
+        if let Err(e) = env::set_current_dir(main_path) {
+            print_error(&format!("Failed to change to main directory: {}", e));
+        }
+    }
 
+    // Step 2: Checkout source branch
+    print_info(&format!("Checking out {}...", source_branch));
+    git.checkout(&source_branch)?;
+    print_success(&format!("Switched to {}", source_branch));
+
+    // Step 3: Merge the task branch into source
     let merge_success = if no_merge {
         false
     } else {
@@ -170,10 +182,11 @@ pub fn handle_close<R: CommandRunner>(
             &branch_name,
             &source_branch,
             &config.merge_strategy,
-            main_worktree_for_merge,
+            None,
         )?
     };
 
+    // Step 4: Delete the worktree (before branch delete, git won't delete branch used by worktree)
     if let Some(ref path) = maybe_worktree_path {
         let path_str = path.to_string_lossy().to_string();
         print_info(&format!("Deleting worktree..."));
@@ -181,14 +194,10 @@ pub fn handle_close<R: CommandRunner>(
         print_success("Worktree deleted");
     }
 
+    // Step 5: Delete the task branch
     if config.delete_branch && (merge_success || no_merge) {
         print_info(&format!("Deleting branch: {}", branch_name));
-        // Use branch_delete_from when in a worktree (worktree dir will be removed)
-        // Use branch_delete when in the main repo (current dir is still valid)
-        match main_worktree_for_merge {
-            Some(path) => git.branch_delete_from(&branch_name, path)?,
-            None => git.branch_delete(&branch_name)?,
-        }
+        git.branch_delete(&branch_name)?;
         print_success("Branch deleted");
     }
 
@@ -215,6 +224,10 @@ pub fn handle_close<R: CommandRunner>(
             "You are now on {}. Branch was not merged. Use 'git merge {}' to merge.",
             source_branch, branch_name
         ));
+    }
+
+    if maybe_worktree_path.is_some() && !use_tmux {
+        print_tip("Worktree directory deleted. Type 'exit' to close this tab.");
     }
 
     Ok(())
@@ -306,23 +319,32 @@ branch refs/heads/feat/login
         }
     }
 
-    fn successful_merge_from_mocks(mock: &mut MockRunner, branch: &str, main_path: &str, strategy: &MergeStrategy) {
+    fn successful_merge_from_mocks(mock: &mut MockRunner, branch: &str, source: &str, strategy: &MergeStrategy) {
+        mock.add_response("git", &["checkout", source], ok_output(""));
         match strategy {
             MergeStrategy::MergeCommit => {
-                mock.add_response("git", &["-C", main_path, "merge", "--no-ff", branch], ok_output(""));
+                mock.add_response("git", &["merge", "--no-ff", branch], ok_output(""));
             }
             MergeStrategy::FastForward => {
-                mock.add_response("git", &["-C", main_path, "merge", "--ff-only", branch], ok_output(""));
+                mock.add_response("git", &["merge", "--ff-only", branch], ok_output(""));
             }
         }
     }
 
     fn cleanup_mocks(mock: &mut MockRunner, path: &str, branch: &str) {
         mock.add_response("git", &["worktree", "remove", path], ok_output(""));
-        mock.add_response("git", &["-C", "/repo", "branch", "-d", branch], ok_output(""));
+        mock.add_response("git", &["branch", "-d", branch], ok_output(""));
     }
 
     fn default_branch_mocks(mock: &mut MockRunner) {
+        mock.add_error(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-source"],
+            MatError::Git {
+                command: "git config --get branch.feat/login.mat-source".into(),
+                stderr: "error: key not found\n".into(),
+            },
+        );
         mock.add_response(
             "git",
             &["symbolic-ref", "refs/remotes/origin/HEAD"],
@@ -413,7 +435,7 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         tmux_close_mocks(&mut mock);
 
@@ -432,7 +454,7 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
 
@@ -451,7 +473,7 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         // No branch -d mock = test will fail if branch_delete is called
         tmux_close_mocks(&mut mock);
@@ -473,7 +495,7 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         tmux_close_mocks(&mut mock);
 
@@ -492,7 +514,7 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::FastForward);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::FastForward);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         tmux_close_mocks(&mut mock);
 
@@ -513,15 +535,16 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
+        mock.add_response("git", &["checkout", "main"], ok_output(""));
         mock.add_error(
             "git",
-            &["-C", "/repo", "merge", "--no-ff", "feat/login"],
+            &["merge", "--no-ff", "feat/login"],
             MatError::Git {
-                command: "git -C /repo merge --no-ff feat/login".into(),
+                command: "git merge --no-ff feat/login".into(),
                 stderr: "Auto-merging src/auth.rs\nCONFLICT (content): Merge conflict in src/auth.rs\nAutomatic merge failed; fix conflicts and then commit the result.\n".into(),
             },
         );
-        mock.add_response("git", &["-C", "/repo", "merge", "--abort"], ok_output(""));
+        mock.add_response("git", &["merge", "--abort"], ok_output(""));
         // No worktree_remove or branch_delete mocks — should not be called
 
         let git = GitClient::new(mock);
@@ -545,8 +568,9 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
+        mock.add_response("git", &["checkout", "main"], ok_output(""));
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        mock.add_response("git", &["-C", "/repo", "branch", "-d", "feat/login"], ok_output(""));
+        mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
 
@@ -565,10 +589,11 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
+        mock.add_response("git", &["checkout", "main"], ok_output(""));
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
-        // No checkout/merge mocks — merge should NOT be called
+        // No merge mock — merge should NOT be called
         // No branch -d mock — delete_branch=true but we skip it intentionally in this test
 
         // Use config_no_delete to avoid needing branch_delete mock
@@ -587,8 +612,9 @@ branch refs/heads/feat/login
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
+        mock.add_response("git", &["checkout", "main"], ok_output(""));
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        mock.add_response("git", &["-C", "/repo", "branch", "-d", "feat/login"], ok_output(""));
+        mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
 
@@ -776,7 +802,7 @@ branch refs/heads/main
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         tmux_close_mocks(&mut mock);
 
@@ -797,7 +823,7 @@ branch refs/heads/main
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         // No tmux mocks needed — tmux should not be touched
 
@@ -814,7 +840,7 @@ branch refs/heads/main
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
         tmux_close_mocks(&mut mock);
 
@@ -823,6 +849,33 @@ branch refs/heads/main
         let config = config_tmux_always();
 
         let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        assert!(result.is_ok());
+    }
+
+    // ── Source branch from mat config ─────────────────────────────
+
+    #[test]
+    fn test_close_uses_mat_source_branch_from_config() {
+        let mut mock = mock_git();
+        setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
+        // Config returns "develop" as the source branch
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-source"],
+            ok_output("develop\n"),
+        );
+        // default_branch should NOT be called since config has the value
+        successful_merge_from_mocks(&mut mock, "feat/login", "develop", &MergeStrategy::MergeCommit);
+        cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
+        tmux_close_mocks(&mut mock);
+
+        let git = GitClient::new(mock.clone());
+        let tmux = TmuxClient::new(mock);
+        let config = base_config();
+
+        let result = run_with_tmux_env(|| {
+            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
+        });
         assert!(result.is_ok());
     }
 
@@ -839,9 +892,9 @@ branch refs/heads/main
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
-        successful_merge_from_mocks(&mut mock, "feat/login", "/repo", &MergeStrategy::MergeCommit);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        mock.add_response("git", &["-C", "/repo", "branch", "-d", "feat/login"], ok_output(""));
+        mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         // tmux errors should propagate
         mock.add_response("tmux", &["list-windows", "-F", "#{window_index}"], ok_output("0\n1\n"));
         mock.add_response("tmux", &["display-message", "-p", "#{window_index}"], ok_output("1\n"));

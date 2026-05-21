@@ -26,24 +26,9 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.2.0")]
+#[command(name = "mat", version = "0.3.0")]
 #[command(about = "Multi-Agent Task - Create TMUX window + Git worktree for new features", long_about = None)]
 struct Cli {
-    #[arg(help = "Task type (e.g., feat, fix, chore, refactor)")]
-    task_type: Option<String>,
-
-    #[arg(help = "Task name (e.g., increase-counter)")]
-    task_name: Option<String>,
-
-    #[arg(short, long, help = "Base branch to create worktree from")]
-    source: Option<String>,
-
-    #[arg(long, help = "Skip worktree creation, only create branch")]
-    no_worktree: bool,
-
-    #[arg(long, help = "Force tmux window creation even outside tmux")]
-    use_tmux: bool,
-
     #[arg(short = 'c', long, help = "Close the current task worktree (deprecated, use 'mat close')")]
     close: bool,
 
@@ -56,6 +41,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum MatCommand {
+    /// Create a new task worktree
+    Create {
+        #[arg(help = "Task type (e.g., feat, fix, chore, refactor)")]
+        task_type: String,
+
+        #[arg(help = "Task name (e.g., increase-counter)")]
+        task_name: String,
+
+        #[arg(short, long, help = "Base branch to create worktree from")]
+        source: Option<String>,
+
+        #[arg(long, help = "Skip worktree creation, only create branch")]
+        no_worktree: bool,
+
+        #[arg(long, help = "Force tmux window creation even outside tmux")]
+        use_tmux: bool,
+    },
     /// Close the current task worktree
     Close {
         #[arg(long, help = "Skip merge on close")]
@@ -110,27 +112,28 @@ fn cli_to_command(cli: Cli) -> Result<Command, MatError> {
     }
 
     match cli.command {
+        Some(MatCommand::Create {
+            task_type,
+            task_name,
+            source,
+            no_worktree,
+            use_tmux,
+        }) => Ok(Command::Create {
+            task_type,
+            task_name,
+            source,
+            no_worktree,
+            use_tmux,
+        }),
         Some(MatCommand::Close { no_merge }) => Ok(Command::Close { no_merge }),
         Some(MatCommand::Config { command }) => match command {
             ConfigCommands::List => Ok(Command::ConfigList),
             ConfigCommands::Get { key } => Ok(Command::ConfigGet { key }),
             ConfigCommands::Set { key, value, global } => Ok(Command::ConfigSet { key, value, global }),
         },
-        None => {
-            let task_type = cli.task_type.ok_or_else(|| MatError::Validation {
-                message: "Task type is required".into(),
-            })?;
-            let task_name = cli.task_name.ok_or_else(|| MatError::Validation {
-                message: "Task name is required".into(),
-            })?;
-            Ok(Command::Create {
-                task_type,
-                task_name,
-                source: cli.source,
-                no_worktree: cli.no_worktree,
-                use_tmux: cli.use_tmux,
-            })
-        }
+        None => Err(MatError::Validation {
+            message: "A subcommand is required. Use 'mat create', 'mat close', or 'mat config'".into(),
+        }),
     }
 }
 
@@ -140,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_create_feat_login() {
-        let cli = Cli::try_parse_from(["mat", "feat", "login"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "create", "feat", "login"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -156,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_create_fix_bug_no_worktree() {
-        let cli = Cli::try_parse_from(["mat", "fix", "bug", "--no-worktree"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "create", "fix", "bug", "--no-worktree"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -172,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_create_with_source() {
-        let cli = Cli::try_parse_from(["mat", "feat", "login", "--source", "develop"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "--source", "develop"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -188,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_create_with_short_source() {
-        let cli = Cli::try_parse_from(["mat", "feat", "login", "-s", "staging"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "-s", "staging"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert!(matches!(
             cmd,
@@ -201,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_create_with_use_tmux() {
-        let cli = Cli::try_parse_from(["mat", "feat", "login", "--use-tmux"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "--use-tmux"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert!(matches!(
             cmd,
@@ -296,25 +299,24 @@ mod tests {
 
     #[test]
     fn test_create_missing_task_type_returns_validation_error() {
+        let result = Cli::try_parse_from(["mat", "create"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_missing_task_name_returns_validation_error() {
+        let result = Cli::try_parse_from(["mat", "create", "feat"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_no_subcommand_returns_validation_error() {
         let cli = Cli::try_parse_from(["mat"]).unwrap();
         let result = cli_to_command(cli);
         assert!(result.is_err());
         match result.unwrap_err() {
             MatError::Validation { message } => {
-                assert!(message.contains("Task type is required"));
-            }
-            _ => panic!("Expected MatError::Validation"),
-        }
-    }
-
-    #[test]
-    fn test_create_missing_task_name_returns_validation_error() {
-        let cli = Cli::try_parse_from(["mat", "feat"]).unwrap();
-        let result = cli_to_command(cli);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MatError::Validation { message } => {
-                assert!(message.contains("Task name is required"));
+                assert!(message.contains("A subcommand is required"));
             }
             _ => panic!("Expected MatError::Validation"),
         }

@@ -23,6 +23,11 @@ fn should_use_tmux(config: &Config, use_tmux_flag: bool) -> bool {
     }
 }
 
+fn store_source_branch<R: CommandRunner>(git: &GitClient<R>, branch: &str, source: &str) {
+    let key = format!("branch.{}.mat-source", branch);
+    let _ = git.config_set(&key, source);
+}
+
 pub fn handle_create<R: CommandRunner>(
     task_type: &str,
     task_name: &str,
@@ -37,9 +42,15 @@ pub fn handle_create<R: CommandRunner>(
 ) -> Result<(), MatError> {
     let source_branch = match source {
         Some(s) => s.to_string(),
-        None => git
-            .default_branch()
-            .unwrap_or_else(|_| config.default_branch.clone()),
+        None => {
+            let current = git.current_branch().ok().filter(|b| !b.is_empty());
+            match current {
+                Some(branch) => branch,
+                None => git
+                    .default_branch()
+                    .unwrap_or_else(|_| config.default_branch.clone()),
+            }
+        }
     };
 
     let names = naming::generate_names(app_name, task_type, task_name, config, repo_dir);
@@ -71,6 +82,7 @@ fn handle_no_worktree<R: CommandRunner>(
         names.branch_name, source_branch
     ));
     git.checkout_b(&names.branch_name, source_branch)?;
+    store_source_branch(git, &names.branch_name, source_branch);
     print_success(&format!("Switched to branch {}", names.branch_name));
 
     println!();
@@ -100,6 +112,7 @@ fn handle_worktree_tmux<R: CommandRunner>(
 
     let path_str = names.worktree_path.to_string_lossy().to_string();
     git.worktree_add(&path_str, &names.branch_name, source_branch)?;
+    store_source_branch(git, &names.branch_name, source_branch);
     print_success(&format!("Worktree created at {}", path_str));
 
     let window_index = tmux.new_window(&path_str)?;
@@ -268,6 +281,7 @@ fn handle_worktree_shell<R: CommandRunner>(
 
     let path_str = names.worktree_path.to_string_lossy().to_string();
     git.worktree_add(&path_str, &names.branch_name, source_branch)?;
+    store_source_branch(git, &names.branch_name, source_branch);
     print_success(&format!("Worktree created at {}", path_str));
 
     if try_open_new_terminal_tab(&names.worktree_path) {
@@ -319,7 +333,7 @@ mod tests {
         std::fs::create_dir_all(&tree_path).unwrap();
 
         let mut mock = MockRunner::new();
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response("git", &["worktree", "add", "-b", "fix/typo", &tree_path, "main"], ok_output(""));
 
         let git = GitClient::new(mock);
@@ -369,7 +383,7 @@ mod tests {
     fn test_worktree_tmux_path_full_flow() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
@@ -404,7 +418,7 @@ mod tests {
     fn test_worktree_tmux_worktree_add_failure() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_error("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], MatError::Git {
             command: "git worktree add".into(),
             stderr: "fatal: already exists".into(),
@@ -426,6 +440,7 @@ mod tests {
     fn test_worktree_tmux_uses_default_branch_from_config_when_auto_detect_fails() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
+        mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
         mock.add_error("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], MatError::Git {
             command: "git symbolic-ref".into(),
             stderr: "no upstream".into(),
@@ -535,7 +550,7 @@ mod tests {
         std::fs::create_dir_all(&tree_path).unwrap();
 
         let mut mock = MockRunner::new();
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
 
         let git = GitClient::new(mock);
@@ -564,7 +579,7 @@ mod tests {
     fn test_tmux_enabled_always_forces_tmux_even_without_env() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
         mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
         mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
@@ -582,7 +597,7 @@ mod tests {
     fn test_tmux_enabled_always_fails_when_tmux_not_running() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
-        mock.add_response("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], ok_output("refs/remotes/origin/main\n"));
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
         mock.add_error("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], MatError::Tmux {
             command: "tmux new-window".into(),
@@ -603,6 +618,7 @@ mod tests {
     fn test_default_branch_from_config_when_source_not_given() {
         let mut mock = MockRunner::new();
         let tree_path = wt("chore", "update");
+        mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
         mock.add_error("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], MatError::Git {
             command: "git symbolic-ref".into(),
             stderr: "no upstream".into(),
@@ -655,5 +671,23 @@ mod tests {
         if let Some(val) = old_tmux {
             env::set_var("TMUX", val);
         }
+    }
+
+    #[test]
+    fn test_uses_current_branch_as_source_when_not_provided() {
+        let mut mock = MockRunner::new();
+        let tree_path = wt("feat", "login");
+        mock.add_response("git", &["branch", "--show-current"], ok_output("develop\n"));
+        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
+        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
+        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
+        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd {}", tree_path), "Enter"], ok_output(""));
+
+        let git = GitClient::new(mock.clone());
+        let tmux = TmuxClient::new(mock);
+        let config = config_tmux(TmuxMode::Always);
+
+        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        assert!(result.is_ok());
     }
 }
