@@ -26,7 +26,7 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.3.0")]
+#[command(name = "mat", version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Multi-Agent Task - Create TMUX window + Git worktree for new features", long_about = None)]
 struct Cli {
     #[arg(short = 'c', long, help = "Close the current task worktree (deprecated, use 'mat close')")]

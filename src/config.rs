@@ -366,7 +366,7 @@ fn load_project_config() -> Result<(Option<RawConfig>, Option<PathBuf>), MatErro
     Ok((Some(raw), Some(path)))
 }
 
-fn get_repo_root() -> Result<PathBuf, MatError> {
+pub(crate) fn get_repo_root() -> Result<PathBuf, MatError> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
@@ -545,6 +545,284 @@ fn resolve_tmux_field(
         sources.insert("tmux.enabled".into(), Source::Default);
         default
     }
+}
+
+// ── Settings (expansível, pode ter novas seções no futuro) ─────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct WorktreeSettings {
+    #[serde(default = "default_worktree_copy_patterns")]
+    pub copy_patterns: Vec<String>,
+
+    #[serde(default = "default_worktree_copy_ignores")]
+    pub copy_ignores: Vec<String>,
+
+    #[serde(default = "default_worktree_path_template")]
+    pub path_template: String,
+
+    #[serde(default)]
+    pub post_create_cmd: Vec<String>,
+
+    #[serde(default)]
+    pub terminal_command: String,
+
+    #[serde(default)]
+    pub delete_branch_with_worktree: bool,
+}
+
+fn default_worktree_copy_patterns() -> Vec<String> {
+    vec![".env*".to_string(), ".vscode/**".to_string()]
+}
+
+fn default_worktree_copy_ignores() -> Vec<String> {
+    vec![
+        "**/dist/**".to_string(),
+        "**/node_modules/**".to_string(),
+        "**/.git/**".to_string(),
+        "**/Thumbs.db".to_string(),
+        "**/.DS_Store".to_string(),
+    ]
+}
+
+fn default_worktree_path_template() -> String {
+    "$BASE_PATH.wtree".to_string()
+}
+
+impl Default for WorktreeSettings {
+    fn default() -> Self {
+        WorktreeSettings {
+            copy_patterns: default_worktree_copy_patterns(),
+            copy_ignores: default_worktree_copy_ignores(),
+            path_template: default_worktree_path_template(),
+            post_create_cmd: vec!["npm install".to_string()],
+            terminal_command: String::new(),
+            delete_branch_with_worktree: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Settings {
+    #[serde(default)]
+    pub worktree: WorktreeSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            worktree: WorktreeSettings::default(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn load() -> Result<Settings, MatError> {
+        if let Ok(config) = Self::load_project() {
+            return Ok(config);
+        }
+
+        if let Ok(config) = Self::load_global() {
+            return Ok(config);
+        }
+
+        Self::create_default()?;
+
+        Ok(Settings::default())
+    }
+
+    fn load_project() -> Result<Settings, MatError> {
+        let repo_root = get_repo_root()?;
+        let path = repo_root.join(".mat").join("settings.toml");
+
+        if !path.exists() {
+            return Err(MatError::SettingsNotFound);
+        }
+
+        let content = fs::read_to_string(&path)?;
+
+        if content.trim().is_empty() {
+            return Ok(Settings::default());
+        }
+
+        let config: Settings = toml::from_str(&content).map_err(|e| MatError::Config {
+            key: "settings".into(),
+            reason: format!("Failed to parse {}: {}", path.display(), e),
+        })?;
+
+        Ok(config)
+    }
+
+    fn load_global() -> Result<Settings, MatError> {
+        let home = dirs::home_dir().ok_or_else(|| MatError::Config {
+            key: "home_dir".into(),
+            reason: "Could not determine home directory".into(),
+        })?;
+
+        let path = home.join(".mat").join("settings.toml");
+
+        if !path.exists() {
+            return Err(MatError::SettingsNotFound);
+        }
+
+        let content = fs::read_to_string(&path)?;
+
+        if content.trim().is_empty() {
+            return Ok(Settings::default());
+        }
+
+        let config: Settings = toml::from_str(&content).map_err(|e| MatError::Config {
+            key: "settings".into(),
+            reason: format!("Failed to parse {}: {}", path.display(), e),
+        })?;
+
+        Ok(config)
+    }
+
+    fn create_default() -> Result<(), MatError> {
+        let repo_root = get_repo_root()?;
+        let dir = repo_root.join(".mat");
+        let path = dir.join("settings.toml");
+
+        if path.exists() {
+            return Ok(());
+        }
+
+        fs::create_dir_all(&dir)?;
+
+        let default_content = r#"# Mat Settings
+# See documentation for more details
+
+[worktree]
+copy_patterns = [
+    ".env*",
+    ".vscode/**"
+]
+
+copy_ignores = [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/Thumbs.db",
+    "**/.DS_Store"
+]
+
+path_template = "$BASE_PATH.wtree"
+
+post_create_cmd = ["npm install"]
+
+terminal_command = ""
+
+delete_branch_with_worktree = false
+"#;
+
+        fs::write(&path, default_content)?;
+
+        Ok(())
+    }
+}
+
+// ── Utility functions for worktree operations ─────────────────────
+
+pub fn process_path_template(template: &str, base_path: &std::path::Path, app_name: &str, task_type: &str, task_name: &str) -> std::path::PathBuf {
+    let path_str = template
+        .replace("$BASE_PATH", &base_path.to_string_lossy())
+        .replace("$APP_NAME", app_name)
+        .replace("$TYPE", task_type)
+        .replace("$NAME", task_name);
+
+    std::path::PathBuf::from(path_str)
+}
+
+pub fn copy_worktree_files(
+    source_dir: &std::path::Path,
+    target_dir: &std::path::Path,
+    settings: &Settings,
+) -> Result<(), MatError> {
+    let patterns = &settings.worktree.copy_patterns;
+    let ignores = &settings.worktree.copy_ignores;
+
+    for pattern in patterns {
+        let full_pattern = source_dir.join(pattern);
+        let pattern_str = full_pattern.to_string_lossy().to_string();
+
+        for entry in glob::glob(&pattern_str)? {
+            let path = entry?;
+
+            if should_ignore(&path, ignores) {
+                continue;
+            }
+
+            let relative = path
+                .strip_prefix(source_dir)
+                .unwrap_or(&path)
+                .to_path_buf();
+            let target = target_dir.join(relative);
+
+            if path.is_file() {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&path, &target)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn should_ignore(path: &std::path::Path, ignores: &[String]) -> bool {
+    let path_str = path.to_string_lossy().replace('\\', "/");
+
+    for ignore in ignores {
+        let ignore_normalized = ignore.replace('\\', "/");
+        if let Ok(pattern) = glob::Pattern::new(&ignore_normalized) {
+            if pattern.matches(&path_str) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn run_post_create_commands(
+    worktree_path: &std::path::Path,
+    commands: &[String],
+) -> Result<(), MatError> {
+    for cmd in commands {
+        if cmd.trim().is_empty() {
+            continue;
+        }
+
+        let status = if cfg!(target_os = "windows") {
+            std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
+                .current_dir(worktree_path)
+                .status()
+                .or_else(|_| {
+                    std::process::Command::new("cmd")
+                        .args(["/C", cmd])
+                        .current_dir(worktree_path)
+                        .status()
+                })?
+        } else {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(worktree_path)
+                .status()?
+        };
+
+        if !status.success() {
+            crate::display::print_warning(&format!(
+                "Command failed with exit code: {:?}",
+                status.code()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_toml_value(value: &str) -> toml::Value {
@@ -1099,5 +1377,133 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
         let config = Config::default();
         let entry = config.effective_value("tmux.enabled").unwrap();
         assert_eq!(entry.value, "auto");
+    }
+
+    // ── Settings tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_settings_default_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.worktree.copy_patterns.len(), 2);
+        assert!(settings.worktree.copy_patterns.contains(&".env*".to_string()));
+        assert!(settings.worktree.copy_patterns.contains(&".vscode/**".to_string()));
+        assert_eq!(settings.worktree.copy_ignores.len(), 5);
+        assert_eq!(settings.worktree.path_template, "$BASE_PATH.wtree");
+        assert_eq!(settings.worktree.post_create_cmd, vec!["npm install"]);
+        assert_eq!(settings.worktree.terminal_command, "");
+        assert!(!settings.worktree.delete_branch_with_worktree);
+    }
+
+    #[test]
+    fn test_settings_from_toml_full() {
+        let toml_str = r#"
+[worktree]
+copy_patterns = [".env*"]
+copy_ignores = ["**/dist/**"]
+path_template = "$BASE_PATH.worktree"
+post_create_cmd = ["npm install", "npm run build"]
+terminal_command = "code"
+delete_branch_with_worktree = true
+"#;
+
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.worktree.copy_patterns, vec![".env*"]);
+        assert_eq!(settings.worktree.copy_ignores, vec!["**/dist/**"]);
+        assert_eq!(settings.worktree.path_template, "$BASE_PATH.worktree");
+        assert_eq!(settings.worktree.post_create_cmd.len(), 2);
+        assert_eq!(settings.worktree.terminal_command, "code");
+        assert!(settings.worktree.delete_branch_with_worktree);
+    }
+
+    #[test]
+    fn test_settings_from_toml_minimal() {
+        let toml_str = "[worktree]\n";
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            settings.worktree.copy_patterns,
+            default_worktree_copy_patterns()
+        );
+        assert!(!settings.worktree.delete_branch_with_worktree);
+    }
+
+    #[test]
+    fn test_settings_empty_toml_uses_defaults() {
+        let toml_str = "";
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.worktree.copy_patterns.len(), 2);
+        assert_eq!(settings.worktree.post_create_cmd, vec!["npm install"]);
+    }
+
+    #[test]
+    fn test_worktree_settings_default_copy_patterns() {
+        let patterns = default_worktree_copy_patterns();
+        assert_eq!(patterns.len(), 2);
+        assert!(patterns.contains(&".env*".to_string()));
+        assert!(patterns.contains(&".vscode/**".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_settings_default_copy_ignores() {
+        let ignores = default_worktree_copy_ignores();
+        assert_eq!(ignores.len(), 5);
+        assert!(ignores.contains(&"**/dist/**".to_string()));
+        assert!(ignores.contains(&"**/node_modules/**".to_string()));
+        assert!(ignores.contains(&"**/.git/**".to_string()));
+        assert!(ignores.contains(&"**/Thumbs.db".to_string()));
+        assert!(ignores.contains(&"**/.DS_Store".to_string()));
+    }
+
+    #[test]
+    fn test_process_path_template_default() {
+        let base = std::path::Path::new("/repo");
+        let result = process_path_template("$BASE_PATH.wtree", base, "myapp", "feat", "login");
+        assert_eq!(result, std::path::PathBuf::from("/repo.wtree"));
+    }
+
+    #[test]
+    fn test_process_path_template_with_vars() {
+        let base = std::path::Path::new("/repo");
+        let result = process_path_template(
+            "$BASE_PATH.wtree/$APP_NAME-$TYPE-$NAME",
+            base,
+            "myapp",
+            "feat",
+            "login",
+        );
+        assert_eq!(
+            result,
+            std::path::PathBuf::from("/repo.wtree/myapp-feat-login")
+        );
+    }
+
+    #[test]
+    fn test_process_path_template_no_vars() {
+        let base = std::path::Path::new("/repo");
+        let result = process_path_template("/custom/path", base, "a", "b", "c");
+        assert_eq!(result, std::path::PathBuf::from("/custom/path"));
+    }
+
+    #[test]
+    fn test_should_ignore_matches_pattern() {
+        let ignores = vec!["**/node_modules/**".to_string(), "*.log".to_string()];
+        let path = std::path::Path::new("/repo/node_modules/pkg/index.js");
+        assert!(should_ignore(path, &ignores));
+
+        let path2 = std::path::Path::new("/repo/debug.log");
+        assert!(should_ignore(path2, &ignores));
+    }
+
+    #[test]
+    fn test_should_ignore_no_match() {
+        let ignores = vec!["**/node_modules/**".to_string()];
+        let path = std::path::Path::new("/repo/src/main.rs");
+        assert!(!should_ignore(path, &ignores));
+    }
+
+    #[test]
+    fn test_should_ignore_empty_list() {
+        let ignores: Vec<String> = vec![];
+        let path = std::path::Path::new("/repo/anything.txt");
+        assert!(!should_ignore(path, &ignores));
     }
 }
