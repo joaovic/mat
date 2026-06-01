@@ -1,0 +1,16 @@
+# Cross-compilation targets for mat
+#
+# Prerequisites:
+#   rustup target add x86_64-pc-windows-msvc
+#   rustup target add aarch64-pc-windows-msvc
+#
+# On Linux, you need the MinGW-w64 toolchain for GNU targets:
+#   sudo apt install mingw-w64
+#   rustup target add x86_64-pc-windows-gnu
+
+[target.x86_64-pc-windows-msvc]
+# Uses the MSVC linker (default with Visual Studio Build Tools)
+# No extra config needed if using rustup + MSVC toolchain
+
+[target.aarch64-pc-windows-msvc]
+# For ARM64 Windows builds

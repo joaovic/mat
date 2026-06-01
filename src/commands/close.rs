@@ -6,6 +6,7 @@ use crate::display::{print_error, print_info, print_success, print_tip, print_wa
 use crate::error::MatError;
 use crate::config::MergeStrategy;
 use crate::git::{CommandRunner, GitClient};
+use crate::naming;
 use crate::tmux::TmuxClient;
 
 fn should_use_tmux(config: &Config) -> bool {
@@ -159,7 +160,7 @@ pub fn handle_close<R: CommandRunner>(
     let main_worktree_path = worktrees
         .iter()
         .find(|wt| wt.is_main)
-        .map(|wt| wt.path.to_string_lossy().to_string());
+        .map(|wt| naming::normalize_path(&wt.path));
 
     // Step 1: Change to main worktree directory first (so shell ends up in valid directory)
     if let Some(ref main_path) = main_worktree_path {
@@ -186,21 +187,7 @@ pub fn handle_close<R: CommandRunner>(
         )?
     };
 
-    // Step 4: Delete the worktree (before branch delete, git won't delete branch used by worktree)
-    if let Some(ref path) = maybe_worktree_path {
-        let path_str = path.to_string_lossy().to_string();
-        print_info(&format!("Deleting worktree..."));
-        git.worktree_remove(&path_str)?;
-        print_success("Worktree deleted");
-    }
-
-    // Step 5: Delete the task branch
-    if config.delete_branch && (merge_success || no_merge) {
-        print_info(&format!("Deleting branch: {}", branch_name));
-        git.branch_delete(&branch_name)?;
-        print_success("Branch deleted");
-    }
-
+    // Step 4: Close tmux window (before worktree remove — releases Windows worktree lock)
     let use_tmux = should_use_tmux(config);
 
     if no_merge && use_tmux {
@@ -211,6 +198,31 @@ pub fn handle_close<R: CommandRunner>(
     if use_tmux {
         tmux.close_current_window()?;
         print_success("TMUX window closed");
+    }
+
+    // Step 5: Change to original directory to release worktree lock, then delete worktree
+    if let Some(ref path) = maybe_worktree_path {
+        // Restore original cwd (where `mat create` was issued) to avoid Windows worktree lock
+        let cwd_key = format!("branch.{}.mat-cwd", branch_name);
+        if let Ok(original_cwd) = git.config_get(&cwd_key) {
+            if !original_cwd.is_empty() {
+                if let Err(e) = env::set_current_dir(&original_cwd) {
+                    print_error(&format!("Failed to change to original directory: {}", e));
+                }
+            }
+        }
+
+        let path_str = naming::normalize_path(path);
+        print_info(&format!("Deleting worktree..."));
+        git.worktree_remove(&path_str)?;
+        print_success("Worktree deleted");
+    }
+
+    // Step 6: Delete the task branch
+    if config.delete_branch && (merge_success || no_merge) {
+        print_info(&format!("Deleting branch: {}", branch_name));
+        git.branch_delete(&branch_name)?;
+        print_success("Branch deleted");
     }
 
     println!();
@@ -332,6 +344,11 @@ branch refs/heads/feat/login
     }
 
     fn cleanup_mocks(mock: &mut MockRunner, path: &str, branch: &str) {
+        mock.add_response(
+            "git",
+            &["config", "--get", &format!("branch.{}.mat-cwd", branch)],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", path], ok_output(""));
         mock.add_response("git", &["branch", "-d", branch], ok_output(""));
     }
@@ -455,6 +472,11 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-cwd"],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
 
@@ -569,6 +591,11 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         mock.add_response("git", &["checkout", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-cwd"],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
@@ -590,6 +617,11 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         mock.add_response("git", &["checkout", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-cwd"],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
         tmux_close_mocks(&mut mock);
@@ -613,6 +645,11 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         mock.add_response("git", &["checkout", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-cwd"],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
@@ -893,6 +930,11 @@ branch refs/heads/main
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        mock.add_response(
+            "git",
+            &["config", "--get", "branch.feat/login.mat-cwd"],
+            ok_output("/original/cwd\n"),
+        );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
         // tmux errors should propagate

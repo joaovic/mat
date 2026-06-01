@@ -11,6 +11,17 @@ pub struct Names {
     pub worktree_path: PathBuf,
 }
 
+/// Converts a path to its platform-native string form.
+/// On Windows, forward slashes are replaced with backslashes.
+pub fn normalize_path(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    if cfg!(target_os = "windows") {
+        raw.replace('/', "\\")
+    } else {
+        raw.to_string()
+    }
+}
+
 pub fn get_app_name() -> String {
     env::current_dir()
         .ok()
@@ -147,10 +158,42 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_path_default_trailing_behavior() {
+    fn test_worktree_path_default_uses_platform_separator() {
         let names = generate_names("x", "y", "z", &default_config(), Path::new("/repo"));
         let path_str = names.worktree_path.to_string_lossy().to_string();
-        assert!(path_str.ends_with("x-y/z"));
+        let expected_end = format!("x-y{}z", std::path::MAIN_SEPARATOR);
+        assert!(path_str.ends_with(&expected_end));
+    }
+
+    #[test]
+    fn test_worktree_path_components_are_valid() {
+        let names = generate_names("myapp", "feat", "login", &default_config(), Path::new("/repo"));
+        let components: Vec<_> = names.worktree_path.components().collect();
+        let last = components.last().unwrap();
+        let display = format!("{}", last.as_os_str().to_string_lossy());
+        assert_eq!(display, "login", "last component should be the task name");
+    }
+
+    #[test]
+    fn test_worktree_path_produces_valid_pathbuf() {
+        let names = generate_names("myapp", "feat", "login", &default_config(), Path::new("/repo"));
+        let parent = names.worktree_path.parent().unwrap();
+        assert!(parent.to_string_lossy().contains("myapp-feat"), "parent dir should contain app-type");
+    }
+
+    #[test]
+    fn test_normalize_path_uses_platform_separator() {
+        let p = Path::new("/repo/worktree");
+        let s = normalize_path(p);
+        assert_eq!(s, format!("{}repo{}worktree", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR));
+    }
+
+    #[test]
+    fn test_normalize_path_with_trailing_name() {
+        let p = Path::new("/repo.worktree/app-feat/login");
+        let s = normalize_path(p);
+        let sep = std::path::MAIN_SEPARATOR;
+        assert!(s.contains(&format!("app-feat{}login", sep)));
     }
 
     #[test]

@@ -115,9 +115,14 @@ impl<R: CommandRunner> TmuxClient<R> {
         if windows.len() > 1 {
             let target = windows.iter().find(|&&w| w != current).copied().unwrap_or(0);
             self.select_window(&target.to_string())?;
+            self.kill_window(current)?;
+        } else {
+            // Only window: kill-window may exit non-zero on PSMUX when killing
+            // the session's last window. Fall back to kill-session.
+            if self.kill_window(current).is_err() {
+                self.run_tmux(&["kill-session"])?;
+            }
         }
-
-        self.kill_window(current)?;
         Ok(())
     }
 }
@@ -329,6 +334,32 @@ mod tests {
             ok_output("0\n"),
         );
         mock.add_response("tmux", &["kill-window", "-t", "0"], ok_output(""));
+        let tmux = client_with(mock);
+        tmux.close_current_window().unwrap();
+    }
+
+    #[test]
+    fn test_close_current_window_falls_back_to_kill_session() {
+        let mut mock = mock_tmux();
+        mock.add_response(
+            "tmux",
+            &["list-windows", "-F", "#{window_index}"],
+            ok_output("0\n"),
+        );
+        mock.add_response(
+            "tmux",
+            &["display-message", "-p", "#{window_index}"],
+            ok_output("0\n"),
+        );
+        mock.add_error(
+            "tmux",
+            &["kill-window", "-t", "0"],
+            MatError::Tmux {
+                command: "tmux kill-window -t 0".into(),
+                stderr: "kill-window failed on last window".into(),
+            },
+        );
+        mock.add_response("tmux", &["kill-session"], ok_output(""));
         let tmux = client_with(mock);
         tmux.close_current_window().unwrap();
     }

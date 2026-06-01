@@ -17,19 +17,51 @@ It will:
 ## Requirements
 
 - **Git** — Current directory must be a Git repository
-- **TMUX** — Optional, for window management (auto-detected)
+- **TMUX / PSMUX** — Optional, for window management (auto-detected)
+
+### Windows
+
+- **PSMUX** — Native Windows tmux replacement. Install via:
+  ```powershell
+  winget install psmux
+  # or: cargo install psmux
+  # or: scoop install psmux
+  ```
+  PSMUX installs `psmux.exe`, `pmux.exe`, and `tmux.exe` — all identical. `mat` calls `tmux`, so it works immediately.
 
 ## Installation
 
-```bash
-# Build the CLI
-cd mat
-cargo build --release
+### Linux / macOS
 
-# Copy to your PATH
+```bash
+cargo build --release
 cp target/release/mat ~/local/bin/mat
-# or
-sudo cp target/release/mat /usr/local/bin/mat
+```
+
+### Windows (native build)
+
+```powershell
+# Prerequisites:
+#   1. Install Rust from https://rustup.rs
+#   2. Add Windows target:
+rustup target add x86_64-pc-windows-msvc
+
+# Build
+cargo build --release --target x86_64-pc-windows-msvc
+
+# Copy mat.exe to a directory in your PATH
+copy target\x86_64-pc-windows-msvc\release\mat.exe C:\tools\mat.exe
+```
+
+### Cross-compile from Linux to Windows
+
+```bash
+# Add MinGW-w64 toolchain
+sudo apt install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+
+cargo build --release --target x86_64-pc-windows-gnu
+# Binary at: target/x86_64-pc-windows-gnu/release/mat.exe
 ```
 
 ## Usage
