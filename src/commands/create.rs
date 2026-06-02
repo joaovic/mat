@@ -2,7 +2,7 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::{Config, TmuxMode};
+use crate::config::{Config, Settings, TmuxMode};
 use crate::display::{print_info, print_success, print_warning};
 use crate::error::MatError;
 use crate::git::{CommandRunner, GitClient};
@@ -42,6 +42,7 @@ pub fn handle_create<R: CommandRunner>(
     no_worktree: bool,
     use_tmux_flag: bool,
     config: &Config,
+    settings: &Settings,
     git: &GitClient<R>,
     tmux: &TmuxClient<R>,
     app_name: &str,
@@ -60,14 +61,25 @@ pub fn handle_create<R: CommandRunner>(
         }
     };
 
-    let names = naming::generate_names(app_name, task_type, task_name, config, repo_dir);
+    let mut names = naming::generate_names(app_name, task_type, task_name, config, repo_dir);
+
+    // Override worktree path when a custom path_template is set in settings
+    if settings.worktree.path_template != "$BASE_PATH.wtree" {
+        names.worktree_path = crate::config::process_path_template(
+            &settings.worktree.path_template,
+            repo_dir,
+            app_name,
+            task_type,
+            task_name,
+        );
+    }
 
     if no_worktree {
         handle_no_worktree(git, &names, &source_branch)
     } else if should_use_tmux(config, use_tmux_flag) {
-        handle_worktree_tmux(git, tmux, &names, &source_branch)
+        handle_worktree_tmux(git, tmux, &names, &source_branch, settings, repo_dir)
     } else {
-        handle_worktree_shell(git, &names, &source_branch)
+        handle_worktree_shell(git, &names, &source_branch, settings, repo_dir)
     }
 }
 
@@ -107,6 +119,8 @@ fn handle_worktree_tmux<R: CommandRunner>(
     tmux: &TmuxClient<R>,
     names: &naming::Names,
     source_branch: &str,
+    settings: &Settings,
+    source_dir: &Path,
 ) -> Result<(), MatError> {
     print_info("Running prerequisite checks...");
     print_success("Git repository detected");
@@ -122,6 +136,19 @@ fn handle_worktree_tmux<R: CommandRunner>(
     store_source_branch(git, &names.branch_name, source_branch);
     store_cwd(git, &names.branch_name);
     print_success(&format!("Worktree created at {}", path_str));
+
+    // Copy files from source directory to worktree
+    if !settings.worktree.copy_patterns.is_empty() {
+        let _ = crate::config::copy_worktree_files(source_dir, &names.worktree_path, settings);
+    }
+
+    // Run post-create commands
+    if !settings.worktree.post_create_cmd.is_empty() {
+        let _ = crate::config::run_post_create_commands(
+            &names.worktree_path,
+            &settings.worktree.post_create_cmd,
+        );
+    }
 
     let window_index = tmux.new_window(&path_str)?;
     tmux.rename_window(&names.window_name)?;
@@ -315,6 +342,8 @@ fn handle_worktree_shell<R: CommandRunner>(
     git: &GitClient<R>,
     names: &naming::Names,
     source_branch: &str,
+    settings: &Settings,
+    source_dir: &Path,
 ) -> Result<(), MatError> {
     print_success("Git repository detected");
 
@@ -328,6 +357,19 @@ fn handle_worktree_shell<R: CommandRunner>(
     store_source_branch(git, &names.branch_name, source_branch);
     store_cwd(git, &names.branch_name);
     print_success(&format!("Worktree created at {}", path_str));
+
+    // Copy files from source directory to worktree
+    if !settings.worktree.copy_patterns.is_empty() {
+        let _ = crate::config::copy_worktree_files(source_dir, &names.worktree_path, settings);
+    }
+
+    // Run post-create commands
+    if !settings.worktree.post_create_cmd.is_empty() {
+        let _ = crate::config::run_post_create_commands(
+            &names.worktree_path,
+            &settings.worktree.post_create_cmd,
+        );
+    }
 
     if try_open_new_terminal_tab(&names.worktree_path) {
         print_success("Opened new terminal tab in worktree directory");
@@ -357,7 +399,7 @@ fn handle_worktree_shell<R: CommandRunner>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TmuxConfig;
+    use crate::config::{Settings, TmuxConfig};
     use crate::git::{CommandOutput, MockRunner};
     use std::path::Path;
 
@@ -395,7 +437,7 @@ mod tests {
         env::set_var("MAT_SKIP_TERMINAL", "1");
 
         let app_name = APP_NAME;
-        let result = handle_create("fix", "typo", None, false, false, &config, &git, &tmux, app_name, &repo_dir);
+        let result = handle_create("fix", "typo", None, false, false, &config, &base_settings(), &git, &tmux, app_name, &repo_dir);
 
         match prev_shell {
             Some(s) => env::set_var("SHELL", s),
@@ -408,6 +450,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
 
         result
+    }
+
+    fn base_settings() -> Settings {
+        Settings::default()
     }
 
     fn ok_output(stdout: &str) -> CommandOutput {
@@ -444,7 +490,7 @@ mod tests {
         let tmux = TmuxClient::new(mock);
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -461,7 +507,7 @@ mod tests {
         let tmux = TmuxClient::new(mock);
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", Some("develop"), false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", Some("develop"), false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -479,7 +525,7 @@ mod tests {
         let tmux = TmuxClient::new(MockRunner::new());
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_err());
         match result.unwrap_err() {
             MatError::Git { ref stderr, .. } => assert!(stderr.contains("already exists")),
@@ -509,7 +555,7 @@ mod tests {
             ..Config::default()
         };
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -526,7 +572,7 @@ mod tests {
         let tmux = TmuxClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -540,7 +586,7 @@ mod tests {
         let tmux = TmuxClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -554,7 +600,7 @@ mod tests {
         let tmux = TmuxClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -568,7 +614,7 @@ mod tests {
         let tmux = TmuxClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -611,7 +657,7 @@ mod tests {
         env::set_var("SHELL", "true");
         env::set_var("MAT_SKIP_TERMINAL", "1");
 
-        let result = handle_create("feat", "login", None, false, true, &config, &git, &tmux, APP_NAME, &repo_dir);
+        let result = handle_create("feat", "login", None, false, true, &config, &base_settings(), &git, &tmux, APP_NAME, &repo_dir);
 
         match prev_shell {
             Some(s) => env::set_var("SHELL", s),
@@ -640,7 +686,7 @@ mod tests {
         let tmux = TmuxClient::new(mock);
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -659,7 +705,7 @@ mod tests {
         let tmux = TmuxClient::new(mock);
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_err());
     }
 
@@ -687,7 +733,7 @@ mod tests {
             ..Config::default()
         };
 
-        let result = handle_create("chore", "update", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("chore", "update", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 
@@ -738,7 +784,7 @@ mod tests {
         let tmux = TmuxClient::new(mock);
         let config = config_tmux(TmuxMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &git, &tmux, APP_NAME, repo());
+        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
         assert!(result.is_ok());
     }
 }

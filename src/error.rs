@@ -8,6 +8,9 @@ pub enum MatError {
     Config { key: String, reason: String },
     Validation { message: String },
     Io(Arc<std::io::Error>),
+    Glob { message: String },
+    PatternError { message: String },
+    SettingsNotFound,
 }
 
 impl fmt::Display for MatError {
@@ -28,6 +31,15 @@ impl fmt::Display for MatError {
             MatError::Io(err) => {
                 write!(f, "IO error: {}", err.as_ref())
             }
+            MatError::Glob { message } => {
+                write!(f, "Glob error: {}", message)
+            }
+            MatError::PatternError { message } => {
+                write!(f, "Pattern error: {}", message)
+            }
+            MatError::SettingsNotFound => {
+                write!(f, "Settings file not found")
+            }
         }
     }
 }
@@ -35,6 +47,22 @@ impl fmt::Display for MatError {
 impl From<std::io::Error> for MatError {
     fn from(err: std::io::Error) -> Self {
         MatError::Io(Arc::new(err))
+    }
+}
+
+impl From<glob::GlobError> for MatError {
+    fn from(err: glob::GlobError) -> Self {
+        MatError::Glob {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<glob::PatternError> for MatError {
+    fn from(err: glob::PatternError) -> Self {
+        MatError::PatternError {
+            message: err.to_string(),
+        }
     }
 }
 

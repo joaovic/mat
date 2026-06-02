@@ -31,6 +31,7 @@ fn main() {
         } => {
             let r = (|| -> Result<(), MatError> {
                 let config = crate::config::Config::load()?;
+                let settings = crate::config::Settings::load()?;
                 let git = crate::git::GitClient::new(crate::git::RealRunner);
                 let tmux = crate::tmux::TmuxClient::new(crate::git::RealRunner);
                 let app_name = naming::get_app_name();
@@ -42,6 +43,7 @@ fn main() {
                     no_worktree,
                     use_tmux,
                     &config,
+                    &settings,
                     &git,
                     &tmux,
                     &app_name,

@@ -185,6 +185,91 @@ default_branch = "develop"
 merge_strategy = "fast-forward"
 ```
 
+### Advanced Settings (`.mat/settings.toml`)
+
+`mat` supports advanced worktree configuration via a separate settings file. This file uses a section-based format to allow future expansion.
+
+#### Settings File Location
+
+Settings are loaded with the following precedence (highest to lowest):
+
+1. **Project**: `<repo>/.mat/settings.toml`
+2. **Global**: `$HOME/.mat/settings.toml` (or `%USERPROFILE%\.mat\settings.toml` on Windows)
+3. **Default**: Built-in defaults (created automatically at `<repo>/.mat/settings.toml` if no file exists)
+
+#### Available Settings
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `worktree.copy_patterns` | `string[]` | `[".env*", ".vscode/**"]` | Glob patterns for files to copy into the worktree |
+| `worktree.copy_ignores` | `string[]` | `["**/dist/**", ...]` | Glob patterns for files to ignore during copy |
+| `worktree.path_template` | `string` | `"$BASE_PATH.wtree"` | Template for the worktree directory path |
+| `worktree.post_create_cmd` | `string[]` | `["npm install"]` | Commands to run after worktree creation |
+| `worktree.terminal_command` | `string` | `""` | Custom terminal command (empty = system default) |
+| `worktree.delete_branch_with_worktree` | `bool` | `false` | Delete branch when removing worktree |
+
+#### Path Template Variables
+
+The `path_template` supports these variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `$BASE_PATH` | Repository root path | `/home/user/project` |
+| `$APP_NAME` | Application name (directory basename) | `myapp` |
+| `$TYPE` | Task type | `feat`, `fix`, `chore` |
+| `$NAME` | Task name | `login-page` |
+
+#### Example `.mat/settings.toml`
+
+```toml
+[worktree]
+copy_patterns = [
+    ".env*",
+    ".vscode/**",
+    "docker-compose.yml"
+]
+
+copy_ignores = [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/Thumbs.db",
+    "**/.DS_Store"
+]
+
+path_template = "$BASE_PATH.wtree"
+
+post_create_cmd = ["npm install", "npm run build"]
+
+terminal_command = ""
+
+delete_branch_with_worktree = false
+```
+
+#### Post-Create Commands
+
+Commands are executed using `sh -c` on Unix-like systems and `powershell -Command` on Windows:
+
+```toml
+# Node.js project
+post_create_cmd = ["npm install", "npm run build"]
+
+# Python project
+post_create_cmd = ["pip install -r requirements.txt"]
+
+# Rust project
+post_create_cmd = ["cargo build"]
+```
+
+#### Example: Custom Worktree Path
+
+```toml
+[worktree]
+path_template = "/tmp/worktrees/$APP_NAME/$TYPE/$NAME"
+```
+
+This will create worktrees at `/tmp/worktrees/myapp/feat/login` instead of the default `<repo>.worktree/` location.
+
 ## Window Naming Convention
 
 Windows are named following this pattern:
