@@ -25,7 +25,7 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.4.0")]
+#[command(name = "mat", version = "0.5.0")]
 #[command(about = "Multi-Agent Task - Create Git worktree for new features with herdr workspace support", long_about = None)]
 struct Cli {
     #[arg(short = 'c', long, help = "Close the current task worktree (deprecated, use 'mat close')")]
