@@ -320,8 +320,8 @@ fn test_close_no_worktree_auto_merge() {
     run_git(&["add", "."], repo.path());
     run_git(&["commit", "-m", "Feature work"], repo.path());
 
-    // Close from repo (no-worktree path) — tmux is gracefully skipped when
-    // not inside a tmux session, so the command should succeed.
+    // Close from repo (no-worktree path) — herdr is gracefully skipped when
+    // not available, so the command should succeed.
     let close_out = run_mat(&["close"], repo.path(), None, None, None);
 
     // Verify merge happened: the commit should be in main
@@ -350,10 +350,10 @@ fn test_close_no_worktree_auto_merge() {
         branch_stdout
     );
 
-    // Close should succeed (tmux is skipped when not in a tmux session)
+    // Close should succeed (herdr is skipped when not available)
     assert!(
         close_out.status.success(),
-        "close should succeed when tmux is not active: {}",
+        "close should succeed when herdr is not available: {}",
         String::from_utf8_lossy(&close_out.stderr)
     );
 }
@@ -392,7 +392,7 @@ fn test_close_no_worktree_no_merge() {
 
     // With no-worktree + --no-merge, the close flow attempts to delete
     // the currently checked-out branch without switching away first,
-    // which git forbids. The command fails with a git error (not tmux).
+    // which git forbids.
     assert!(
         !close_out.status.success(),
         "close --no-merge should fail (cannot delete checked-out branch)"
@@ -428,7 +428,7 @@ fn test_close_no_worktree_with_uncommitted_changes() {
     run_git(&["commit", "-m", "Add tracked"], repo.path());
     std::fs::write(repo.path().join("tracked.txt"), "dirty").unwrap();
 
-    // Close should fail with uncommitted changes error (before tmux)
+    // Close should fail with uncommitted changes error
     let close_out = run_mat(&["close"], repo.path(), None, None, None);
 
     assert!(
@@ -481,7 +481,7 @@ fn test_close_no_worktree_merge_conflict() {
     // Switch back to feature branch
     run_git(&["checkout", "feat/nw-conflict"], repo.path());
 
-    // Close should fail with merge conflict (before tmux)
+    // Close should fail with merge conflict
     let close_out = run_mat(&["close"], repo.path(), None, None, None);
 
     assert!(
@@ -668,7 +668,7 @@ fn test_config_list() {
     assert!(stdout.contains("delete_branch"), "Missing delete_branch:\n{}", stdout);
     assert!(stdout.contains("merge_strategy"), "Missing merge_strategy:\n{}", stdout);
     assert!(stdout.contains("worktree_root"), "Missing worktree_root:\n{}", stdout);
-    assert!(stdout.contains("tmux.enabled"), "Missing tmux.enabled:\n{}", stdout);
+    assert!(stdout.contains("herdr.enabled"), "Missing herdr.enabled:\n{}", stdout);
     assert!(stdout.contains("(default)"), "Expected default annotations:\n{}", stdout);
 }
 
@@ -738,11 +738,11 @@ fn test_create_outside_git_repo() {
 }
 
 // ──────────────────────────────────────────────
-//  TMUX detection
+//  Herdr detection
 // ──────────────────────────────────────────────
 
 #[test]
-fn test_tmux_unset_uses_shell_path() {
+fn test_herdr_unset_uses_shell_path() {
     let repo = setup_git_repo();
     let aname = app_name(repo.path());
 
@@ -755,44 +755,13 @@ fn test_tmux_unset_uses_shell_path() {
     );
     assert!(
         output.status.success(),
-        "create should succeed without TMUX:\n{}",
+        "create should succeed without herdr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     let wt = worktree_path(repo.path(), &aname, "feat", "shell-path");
     assert!(wt.exists(), "Worktree not created:\n{}", wt.display());
     cleanup_worktree(repo.path(), &wt);
-}
-
-#[test]
-fn test_tmux_set_tries_tmux_and_fails() {
-    let repo = setup_git_repo();
-    let aname = app_name(repo.path());
-
-    let output = run_mat(
-        &["create", "feat", "tmux-fail"],
-        repo.path(),
-        None,
-        Some("/tmp/tmux-fake"),
-        None,
-    );
-    assert!(
-        !output.status.success(),
-        "create should fail with TMUX set but no tmux server"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.to_lowercase().contains("tmux"),
-        "Expected tmux error:\n{}",
-        stderr
-    );
-
-    // Cleanup: worktree was created but tmux failed
-    let wt = worktree_path(repo.path(), &aname, "feat", "tmux-fail");
-    if wt.exists() {
-        cleanup_worktree(repo.path(), &wt);
-    }
-    try_git(&["branch", "-D", "feat/tmux-fail"], repo.path());
 }
 
 // ── Shared cleanup ────────────────────────────

@@ -9,7 +9,6 @@ pub enum Command {
         task_name: String,
         source: Option<String>,
         no_worktree: bool,
-        use_tmux: bool,
     },
     Close {
         no_merge: bool,
@@ -26,10 +25,14 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "Multi-Agent Task - Create TMUX window + Git worktree for new features", long_about = None)]
+#[command(name = "mat", version = "0.4.0")]
+#[command(about = "Multi-Agent Task - Create Git worktree for new features with herdr workspace support", long_about = None)]
 struct Cli {
-    #[arg(short = 'c', long, help = "Close the current task worktree (deprecated, use 'mat close')")]
+    #[arg(
+        short = 'c',
+        long,
+        help = "Close the current task worktree (deprecated, use 'mat close')"
+    )]
     close: bool,
 
     #[arg(long, help = "Skip merge on close")]
@@ -54,9 +57,6 @@ enum MatCommand {
 
         #[arg(long, help = "Skip worktree creation, only create branch")]
         no_worktree: bool,
-
-        #[arg(long, help = "Force tmux window creation even outside tmux")]
-        use_tmux: bool,
     },
     /// Close the current task worktree
     Close {
@@ -75,9 +75,7 @@ enum ConfigCommands {
     /// List all config values with sources
     List,
     /// Get a config value
-    Get {
-        key: String,
-    },
+    Get { key: String },
     /// Set a config value
     Set {
         key: String,
@@ -117,22 +115,23 @@ fn cli_to_command(cli: Cli) -> Result<Command, MatError> {
             task_name,
             source,
             no_worktree,
-            use_tmux,
         }) => Ok(Command::Create {
             task_type,
             task_name,
             source,
             no_worktree,
-            use_tmux,
         }),
         Some(MatCommand::Close { no_merge }) => Ok(Command::Close { no_merge }),
         Some(MatCommand::Config { command }) => match command {
             ConfigCommands::List => Ok(Command::ConfigList),
             ConfigCommands::Get { key } => Ok(Command::ConfigGet { key }),
-            ConfigCommands::Set { key, value, global } => Ok(Command::ConfigSet { key, value, global }),
+            ConfigCommands::Set { key, value, global } => {
+                Ok(Command::ConfigSet { key, value, global })
+            }
         },
         None => Err(MatError::Validation {
-            message: "A subcommand is required. Use 'mat create', 'mat close', or 'mat config'".into(),
+            message: "A subcommand is required. Use 'mat create', 'mat close', or 'mat config'"
+                .into(),
         }),
     }
 }
@@ -152,7 +151,6 @@ mod tests {
                 task_name: "login".into(),
                 source: None,
                 no_worktree: false,
-                use_tmux: false,
             }
         );
     }
@@ -168,14 +166,14 @@ mod tests {
                 task_name: "bug".into(),
                 source: None,
                 no_worktree: true,
-                use_tmux: false,
             }
         );
     }
 
     #[test]
     fn test_create_with_source() {
-        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "--source", "develop"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["mat", "create", "feat", "login", "--source", "develop"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -184,7 +182,6 @@ mod tests {
                 task_name: "login".into(),
                 source: Some("develop".into()),
                 no_worktree: false,
-                use_tmux: false,
             }
         );
     }
@@ -203,15 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_with_use_tmux() {
-        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "--use-tmux"]).unwrap();
-        let cmd = cli_to_command(cli).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Create { use_tmux: true, .. }
-        ));
-    }
-
     #[test]
     fn test_close_subcommand() {
         let cli = Cli::try_parse_from(["mat", "close"]).unwrap();
@@ -268,8 +256,8 @@ mod tests {
 
     #[test]
     fn test_config_set() {
-        let cli =
-            Cli::try_parse_from(["mat", "config", "set", "merge_strategy", "fast-forward"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "config", "set", "merge_strategy", "fast-forward"])
+            .unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -283,9 +271,15 @@ mod tests {
 
     #[test]
     fn test_config_set_global() {
-        let cli =
-            Cli::try_parse_from(["mat", "config", "set", "--global", "default_branch", "develop"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "mat",
+            "config",
+            "set",
+            "--global",
+            "default_branch",
+            "develop",
+        ])
+        .unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,
@@ -338,8 +332,7 @@ mod tests {
 
     #[test]
     fn test_config_set_validates_key_value_positional() {
-        let cli =
-            Cli::try_parse_from(["mat", "config", "set", "delete_branch", "true"]).unwrap();
+        let cli = Cli::try_parse_from(["mat", "config", "set", "delete_branch", "true"]).unwrap();
         let cmd = cli_to_command(cli).unwrap();
         assert_eq!(
             cmd,

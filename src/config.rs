@@ -46,38 +46,38 @@ impl<'de> Deserialize<'de> for MergeStrategy {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TmuxMode {
+pub enum HerdrMode {
     Auto,
     Always,
     Never,
 }
 
-impl Default for TmuxMode {
+impl Default for HerdrMode {
     fn default() -> Self {
-        TmuxMode::Auto
+        HerdrMode::Auto
     }
 }
 
-impl std::fmt::Display for TmuxMode {
+impl std::fmt::Display for HerdrMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TmuxMode::Auto => write!(f, "auto"),
-            TmuxMode::Always => write!(f, "always"),
-            TmuxMode::Never => write!(f, "never"),
+            HerdrMode::Auto => write!(f, "auto"),
+            HerdrMode::Always => write!(f, "always"),
+            HerdrMode::Never => write!(f, "never"),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for TmuxMode {
+impl<'de> Deserialize<'de> for HerdrMode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
-            "auto" => Ok(TmuxMode::Auto),
-            "always" => Ok(TmuxMode::Always),
-            "never" => Ok(TmuxMode::Never),
+            "auto" => Ok(HerdrMode::Auto),
+            "always" => Ok(HerdrMode::Always),
+            "never" => Ok(HerdrMode::Never),
             other => Err(serde::de::Error::unknown_variant(
                 other,
                 &["auto", "always", "never"],
@@ -87,15 +87,15 @@ impl<'de> Deserialize<'de> for TmuxMode {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TmuxConfig {
+pub struct HerdrConfig {
     #[serde(default)]
-    pub enabled: TmuxMode,
+    pub enabled: HerdrMode,
 }
 
-impl Default for TmuxConfig {
+impl Default for HerdrConfig {
     fn default() -> Self {
-        TmuxConfig {
-            enabled: TmuxMode::Auto,
+        HerdrConfig {
+            enabled: HerdrMode::Auto,
         }
     }
 }
@@ -106,7 +106,7 @@ struct RawConfig {
     delete_branch: Option<bool>,
     merge_strategy: Option<MergeStrategy>,
     worktree_root: Option<String>,
-    tmux: Option<TmuxConfig>,
+    herdr: Option<HerdrConfig>,
 }
 
 impl Default for RawConfig {
@@ -116,7 +116,7 @@ impl Default for RawConfig {
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         }
     }
 }
@@ -144,7 +144,7 @@ pub struct Config {
     pub delete_branch: bool,
     pub merge_strategy: MergeStrategy,
     pub worktree_root: Option<String>,
-    pub tmux: TmuxConfig,
+    pub herdr: HerdrConfig,
     pub global_path: Option<PathBuf>,
     pub project_path: Option<PathBuf>,
     pub sources: HashMap<String, Source>,
@@ -157,14 +157,14 @@ impl Default for Config {
         sources.insert("delete_branch".into(), Source::Default);
         sources.insert("merge_strategy".into(), Source::Default);
         sources.insert("worktree_root".into(), Source::Default);
-        sources.insert("tmux.enabled".into(), Source::Default);
+        sources.insert("herdr.enabled".into(), Source::Default);
 
         Config {
             default_branch: "main".into(),
             delete_branch: true,
             merge_strategy: MergeStrategy::MergeCommit,
             worktree_root: None,
-            tmux: TmuxConfig::default(),
+            herdr: HerdrConfig::default(),
             global_path: None,
             project_path: None,
             sources,
@@ -186,7 +186,7 @@ impl Config {
             "delete_branch",
             "merge_strategy",
             "worktree_root",
-            "tmux.enabled",
+            "herdr.enabled",
         ];
 
         keys.iter()
@@ -206,7 +206,7 @@ impl Config {
             "delete_branch",
             "merge_strategy",
             "worktree_root",
-            "tmux.enabled",
+            "herdr.enabled",
         ];
 
         if !valid_keys.contains(&key) {
@@ -231,7 +231,7 @@ impl Config {
                 .worktree_root
                 .clone()
                 .unwrap_or_else(|| "<not set>".to_string()),
-            "tmux.enabled" => self.tmux.enabled.to_string(),
+            "herdr.enabled" => self.herdr.enabled.to_string(),
             _ => "<unknown>".to_string(),
         }
     }
@@ -433,10 +433,10 @@ fn merge_configs(
         &global.worktree_root,
         &mut sources,
     );
-    let tmux_enabled = resolve_tmux_field(
-        &project.tmux,
-        &global.tmux,
-        TmuxMode::Auto,
+    let herdr_enabled = resolve_herdr_field(
+        &project.herdr,
+        &global.herdr,
+        HerdrMode::Auto,
         &mut sources,
     );
 
@@ -445,7 +445,7 @@ fn merge_configs(
         delete_branch,
         merge_strategy,
         worktree_root,
-        tmux: TmuxConfig { enabled: tmux_enabled },
+        herdr: HerdrConfig { enabled: herdr_enabled },
         global_path,
         project_path,
         sources,
@@ -526,23 +526,23 @@ fn resolve_option_field(
     }
 }
 
-fn resolve_tmux_field(
-    project: &Option<TmuxConfig>,
-    global: &Option<TmuxConfig>,
-    default: TmuxMode,
+fn resolve_herdr_field(
+    project: &Option<HerdrConfig>,
+    global: &Option<HerdrConfig>,
+    default: HerdrMode,
     sources: &mut HashMap<String, Source>,
-) -> TmuxMode {
+) -> HerdrMode {
     let project_val = project.as_ref().map(|t| &t.enabled);
     let global_val = global.as_ref().map(|t| &t.enabled);
 
     if let Some(val) = project_val {
-        sources.insert("tmux.enabled".into(), Source::Project);
+        sources.insert("herdr.enabled".into(), Source::Project);
         val.clone()
     } else if let Some(val) = global_val {
-        sources.insert("tmux.enabled".into(), Source::Global);
+        sources.insert("herdr.enabled".into(), Source::Global);
         val.clone()
     } else {
-        sources.insert("tmux.enabled".into(), Source::Default);
+        sources.insert("herdr.enabled".into(), Source::Default);
         default
     }
 }
@@ -899,36 +899,36 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_mode_deserialize_auto() {
+    fn test_herdr_mode_deserialize_auto() {
         let toml_str = "mode = \"auto\"";
         #[derive(Deserialize)]
         struct Test {
-            mode: TmuxMode,
+            mode: HerdrMode,
         }
         let test: Test = toml::from_str(toml_str).unwrap();
-        assert_eq!(test.mode, TmuxMode::Auto);
+        assert_eq!(test.mode, HerdrMode::Auto);
     }
 
     #[test]
-    fn test_tmux_mode_deserialize_always() {
+    fn test_herdr_mode_deserialize_always() {
         let toml_str = "mode = \"always\"";
         #[derive(Deserialize)]
         struct Test {
-            mode: TmuxMode,
+            mode: HerdrMode,
         }
         let test: Test = toml::from_str(toml_str).unwrap();
-        assert_eq!(test.mode, TmuxMode::Always);
+        assert_eq!(test.mode, HerdrMode::Always);
     }
 
     #[test]
-    fn test_tmux_mode_deserialize_never() {
+    fn test_herdr_mode_deserialize_never() {
         let toml_str = "mode = \"never\"";
         #[derive(Deserialize)]
         struct Test {
-            mode: TmuxMode,
+            mode: HerdrMode,
         }
         let test: Test = toml::from_str(toml_str).unwrap();
-        assert_eq!(test.mode, TmuxMode::Never);
+        assert_eq!(test.mode, HerdrMode::Never);
     }
 
     #[test]
@@ -943,15 +943,15 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_mode_default() {
-        assert_eq!(TmuxMode::default(), TmuxMode::Auto);
+    fn test_herdr_mode_default() {
+        assert_eq!(HerdrMode::default(), HerdrMode::Auto);
     }
 
     #[test]
-    fn test_tmux_mode_display() {
-        assert_eq!(TmuxMode::Auto.to_string(), "auto");
-        assert_eq!(TmuxMode::Always.to_string(), "always");
-        assert_eq!(TmuxMode::Never.to_string(), "never");
+    fn test_herdr_mode_display() {
+        assert_eq!(HerdrMode::Auto.to_string(), "auto");
+        assert_eq!(HerdrMode::Always.to_string(), "always");
+        assert_eq!(HerdrMode::Never.to_string(), "never");
     }
 
     #[test]
@@ -961,7 +961,7 @@ mod tests {
         assert!(config.delete_branch);
         assert_eq!(config.merge_strategy, MergeStrategy::MergeCommit);
         assert_eq!(config.worktree_root, None);
-        assert_eq!(config.tmux.enabled, TmuxMode::Auto);
+        assert_eq!(config.herdr.enabled, HerdrMode::Auto);
     }
 
     #[test]
@@ -984,7 +984,7 @@ mod tests {
             &Source::Default
         );
         assert_eq!(
-            config.sources.get("tmux.enabled").unwrap(),
+            config.sources.get("herdr.enabled").unwrap(),
             &Source::Default
         );
     }
@@ -996,8 +996,8 @@ mod tests {
             delete_branch: Some(false),
             merge_strategy: Some(MergeStrategy::FastForward),
             worktree_root: Some("/global/path".into()),
-            tmux: Some(TmuxConfig {
-                enabled: TmuxMode::Always,
+            herdr: Some(HerdrConfig {
+                enabled: HerdrMode::Always,
             }),
         };
 
@@ -1006,7 +1006,7 @@ mod tests {
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         };
 
         let config = merge_configs(Some(global), None, Some(project), None);
@@ -1029,9 +1029,9 @@ mod tests {
         );
         assert_eq!(config.sources.get("worktree_root").unwrap(), &Source::Global);
 
-        assert_eq!(config.tmux.enabled, TmuxMode::Always);
+        assert_eq!(config.herdr.enabled, HerdrMode::Always);
         assert_eq!(
-            config.sources.get("tmux.enabled").unwrap(),
+            config.sources.get("herdr.enabled").unwrap(),
             &Source::Global
         );
     }
@@ -1043,7 +1043,7 @@ mod tests {
             delete_branch: Some(true),
             merge_strategy: Some(MergeStrategy::MergeCommit),
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         };
 
         let project = RawConfig {
@@ -1051,7 +1051,7 @@ mod tests {
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         };
 
         let config = merge_configs(Some(global), None, Some(project), None);
@@ -1069,7 +1069,7 @@ mod tests {
         assert!(config.delete_branch);
         assert_eq!(config.merge_strategy, MergeStrategy::MergeCommit);
         assert_eq!(config.worktree_root, None);
-        assert_eq!(config.tmux.enabled, TmuxMode::Auto);
+        assert_eq!(config.herdr.enabled, HerdrMode::Auto);
     }
 
     #[test]
@@ -1079,8 +1079,8 @@ mod tests {
             delete_branch: Some(false),
             merge_strategy: Some(MergeStrategy::FastForward),
             worktree_root: Some("/wt".into()),
-            tmux: Some(TmuxConfig {
-                enabled: TmuxMode::Never,
+            herdr: Some(HerdrConfig {
+                enabled: HerdrMode::Never,
             }),
         };
 
@@ -1090,7 +1090,7 @@ mod tests {
         assert_eq!(config.sources.get("default_branch").unwrap(), &Source::Global);
         assert!(!config.delete_branch);
         assert_eq!(config.merge_strategy, MergeStrategy::FastForward);
-        assert_eq!(config.tmux.enabled, TmuxMode::Never);
+        assert_eq!(config.herdr.enabled, HerdrMode::Never);
     }
 
     #[test]
@@ -1131,8 +1131,8 @@ mod tests {
     #[test]
     fn test_set_toml_key_nested() {
         let mut doc = toml::Value::Table(toml::value::Table::new());
-        set_toml_key(&mut doc, "tmux.enabled", toml::Value::String("never".into()));
-        assert_eq!(doc["tmux"]["enabled"].as_str(), Some("never"));
+        set_toml_key(&mut doc, "herdr.enabled", toml::Value::String("never".into()));
+        assert_eq!(doc["herdr"]["enabled"].as_str(), Some("never"));
     }
 
     #[test]
@@ -1197,7 +1197,7 @@ mod tests {
         assert!(keys.contains(&"delete_branch".to_string()));
         assert!(keys.contains(&"merge_strategy".to_string()));
         assert!(keys.contains(&"worktree_root".to_string()));
-        assert!(keys.contains(&"tmux.enabled".to_string()));
+        assert!(keys.contains(&"herdr.enabled".to_string()));
     }
 
     #[test]
@@ -1230,9 +1230,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_config_default() {
-        let tc = TmuxConfig::default();
-        assert_eq!(tc.enabled, TmuxMode::Auto);
+    fn test_herdr_config_default() {
+        let tc = HerdrConfig::default();
+        assert_eq!(tc.enabled, HerdrMode::Auto);
     }
 
     #[test]
@@ -1242,9 +1242,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_mode_partial_eq() {
-        assert_eq!(TmuxMode::Auto, TmuxMode::Auto);
-        assert_ne!(TmuxMode::Auto, TmuxMode::Always);
+    fn test_herdr_mode_partial_eq() {
+        assert_eq!(HerdrMode::Auto, HerdrMode::Auto);
+        assert_ne!(HerdrMode::Auto, HerdrMode::Always);
     }
 
     #[test]
@@ -1254,7 +1254,7 @@ mod tests {
         assert!(raw.delete_branch.is_none());
         assert!(raw.merge_strategy.is_none());
         assert!(raw.worktree_root.is_none());
-        assert!(raw.tmux.is_none());
+        assert!(raw.herdr.is_none());
     }
 
     #[test]
@@ -1269,19 +1269,19 @@ merge_strategy = "fast-forward"
         assert!(!raw.delete_branch.unwrap());
         assert_eq!(raw.merge_strategy.unwrap(), MergeStrategy::FastForward);
         assert!(raw.worktree_root.is_none());
-        assert!(raw.tmux.is_none());
+        assert!(raw.herdr.is_none());
     }
 
     #[test]
-    fn test_parse_toml_config_with_tmux() {
+    fn test_parse_toml_config_with_herdr() {
         let toml_str = r#"
-[tmux]
+[herdr]
 enabled = "always"
 "#;
         let raw: RawConfig = toml::from_str(toml_str).unwrap();
         assert!(raw.default_branch.is_none());
-        let tmux = raw.tmux.unwrap();
-        assert_eq!(tmux.enabled, TmuxMode::Always);
+        let herdr = raw.herdr.unwrap();
+        assert_eq!(herdr.enabled, HerdrMode::Always);
     }
 
     #[test]
@@ -1303,7 +1303,7 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
             delete_branch: Some(true),
             merge_strategy: None,
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         };
 
         let project = RawConfig {
@@ -1311,7 +1311,7 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
             delete_branch: Some(false),
             merge_strategy: None,
             worktree_root: None,
-            tmux: None,
+            herdr: None,
         };
 
         let config = merge_configs(Some(global), None, Some(project), None);
@@ -1320,13 +1320,13 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
     }
 
     #[test]
-    fn test_merge_configs_project_tmux_overrides_global() {
+    fn test_merge_configs_project_herdr_overrides_global() {
         let global = RawConfig {
             default_branch: None,
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            tmux: Some(TmuxConfig { enabled: TmuxMode::Always }),
+            herdr: Some(HerdrConfig { enabled: HerdrMode::Always }),
         };
 
         let project = RawConfig {
@@ -1334,13 +1334,13 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            tmux: Some(TmuxConfig { enabled: TmuxMode::Never }),
+            herdr: Some(HerdrConfig { enabled: HerdrMode::Never }),
         };
 
         let config = merge_configs(Some(global), None, Some(project), None);
-        assert_eq!(config.tmux.enabled, TmuxMode::Never);
+        assert_eq!(config.herdr.enabled, HerdrMode::Never);
         assert_eq!(
-            config.sources.get("tmux.enabled").unwrap(),
+            config.sources.get("herdr.enabled").unwrap(),
             &Source::Project
         );
     }
@@ -1373,9 +1373,9 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
     }
 
     #[test]
-    fn test_effective_value_tmux_enabled() {
+    fn test_effective_value_herdr_enabled() {
         let config = Config::default();
-        let entry = config.effective_value("tmux.enabled").unwrap();
+        let entry = config.effective_value("herdr.enabled").unwrap();
         assert_eq!(entry.value, "auto");
     }
 

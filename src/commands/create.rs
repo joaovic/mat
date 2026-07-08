@@ -2,24 +2,18 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::{Config, Settings, TmuxMode};
+use crate::config::{Config, HerdrMode, Settings};
 use crate::display::{print_info, print_success, print_warning};
 use crate::error::MatError;
 use crate::git::{CommandRunner, GitClient};
+use crate::herdr::HerdrClient;
 use crate::naming;
-use crate::tmux::TmuxClient;
 
-fn should_use_tmux(config: &Config, use_tmux_flag: bool) -> bool {
-    match config.tmux.enabled {
-        TmuxMode::Always => true,
-        TmuxMode::Never => false,
-        TmuxMode::Auto => {
-            if use_tmux_flag {
-                true
-            } else {
-                env::var("TMUX").is_ok()
-            }
-        }
+fn should_use_herdr(config: &Config) -> bool {
+    match config.herdr.enabled {
+        HerdrMode::Always => true,
+        HerdrMode::Never => false,
+        HerdrMode::Auto => false,
     }
 }
 
@@ -40,11 +34,10 @@ pub fn handle_create<R: CommandRunner>(
     task_name: &str,
     source: Option<&str>,
     no_worktree: bool,
-    use_tmux_flag: bool,
     config: &Config,
     settings: &Settings,
     git: &GitClient<R>,
-    tmux: &TmuxClient<R>,
+    herdr: &HerdrClient<R>,
     app_name: &str,
     repo_dir: &Path,
 ) -> Result<(), MatError> {
@@ -76,8 +69,8 @@ pub fn handle_create<R: CommandRunner>(
 
     if no_worktree {
         handle_no_worktree(git, &names, &source_branch)
-    } else if should_use_tmux(config, use_tmux_flag) {
-        handle_worktree_tmux(git, tmux, &names, &source_branch, settings, repo_dir)
+    } else if should_use_herdr(config) {
+        handle_worktree_herdr(git, herdr, &names, &source_branch, settings, repo_dir)
     } else {
         handle_worktree_shell(git, &names, &source_branch, settings, repo_dir)
     }
@@ -105,7 +98,9 @@ fn handle_no_worktree<R: CommandRunner>(
     print_success(&format!("Switched to branch {}", names.branch_name));
 
     println!();
-    print_warning("No-worktree mode: changes are isolated to this branch, not a separate directory.");
+    print_warning(
+        "No-worktree mode: changes are isolated to this branch, not a separate directory.",
+    );
     println!("  Stashed changes can be restored with: git stash pop");
     println!();
 
@@ -114,13 +109,13 @@ fn handle_no_worktree<R: CommandRunner>(
     Ok(())
 }
 
-fn handle_worktree_tmux<R: CommandRunner>(
+fn handle_worktree_herdr<R: CommandRunner>(
     git: &GitClient<R>,
-    tmux: &TmuxClient<R>,
+    herdr: &HerdrClient<R>,
     names: &naming::Names,
     source_branch: &str,
-    settings: &Settings,
-    source_dir: &Path,
+    _settings: &Settings,
+    _source_dir: &Path,
 ) -> Result<(), MatError> {
     print_info("Running prerequisite checks...");
     print_success("Git repository detected");
@@ -137,31 +132,12 @@ fn handle_worktree_tmux<R: CommandRunner>(
     store_cwd(git, &names.branch_name);
     print_success(&format!("Worktree created at {}", path_str));
 
-    // Copy files from source directory to worktree
-    if !settings.worktree.copy_patterns.is_empty() {
-        let _ = crate::config::copy_worktree_files(source_dir, &names.worktree_path, settings);
-    }
-
-    // Run post-create commands
-    if !settings.worktree.post_create_cmd.is_empty() {
-        let _ = crate::config::run_post_create_commands(
-            &names.worktree_path,
-            &settings.worktree.post_create_cmd,
-        );
-    }
-
-    let window_index = tmux.new_window(&path_str)?;
-    tmux.rename_window(&names.window_name)?;
-
-    // Ensure the new window's first pane is in the worktree.
-    // Splits from this pane will inherit its cwd, so all new panels stay in the worktree.
-    // Quote path to handle spaces (common on Windows, possible on any OS).
-    let _ = tmux.send_keys(&format!("{}.0", window_index), &format!("cd \"{}\"", path_str));
+    let _ = herdr.create_workspace(&path_str, &names.worktree_name);
 
     println!();
     print_success(&format!(
-        "Ready! Window '{}' is now open at:",
-        names.window_name
+        "Ready! Herdr workspace '{}' is now open at:",
+        names.worktree_name
     ));
     println!("  {}", path_str);
 
@@ -273,17 +249,23 @@ fn try_open_new_terminal_tab(path: &std::path::Path) -> bool {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         // Only attempt GUI terminals when a display server appears available
-        let has_display = std::env::var("DISPLAY").is_ok()
-            || std::env::var("WAYLAND_DISPLAY").is_ok();
+        let has_display =
+            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
         if !has_display {
             return false;
         }
 
         // Try opening a tab in the current terminal first
         let tab_candidates: [(&str, Vec<&str>); 3] = [
-            ("gnome-terminal", vec!["--tab", "--working-directory", &path_str]),
+            (
+                "gnome-terminal",
+                vec!["--tab", "--working-directory", &path_str],
+            ),
             ("konsole", vec!["--new-tab", "--workdir", &path_str]),
-            ("xfce4-terminal", vec!["--tab", "--working-directory", &path_str]),
+            (
+                "xfce4-terminal",
+                vec!["--tab", "--working-directory", &path_str],
+            ),
         ];
 
         for (cmd, args) in &tab_candidates {
@@ -390,7 +372,9 @@ fn handle_worktree_shell<R: CommandRunner>(
         print_success("Opening new shell in worktree directory...");
         println!("  (Type 'exit' to return to your original directory)");
 
-        child.wait().map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
+        child
+            .wait()
+            .map_err(|e| MatError::Io(std::sync::Arc::new(e)))?;
     }
 
     Ok(())
@@ -399,7 +383,7 @@ fn handle_worktree_shell<R: CommandRunner>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Settings, TmuxConfig};
+    use crate::config::HerdrConfig;
     use crate::git::{CommandOutput, MockRunner};
     use std::path::Path;
 
@@ -417,7 +401,6 @@ mod tests {
     fn run_shell_path(config: Config) -> Result<(), MatError> {
         let tmp = std::env::temp_dir().join("mat_test_create");
         let repo_dir = tmp.join("repo");
-        // generate_names creates: {repo_dir}.worktree/{app}-{type}/{name}
         let tree_path = format!(
             "{}.worktree/{}-fix/typo",
             repo_dir.to_string_lossy(),
@@ -427,17 +410,23 @@ mod tests {
 
         let mut mock = MockRunner::new();
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "fix/typo", &tree_path, "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "fix/typo", &tree_path, "main"],
+            ok_output(""),
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let prev_shell = env::var("SHELL").ok();
         let prev_skip_terminal = env::var("MAT_SKIP_TERMINAL").ok();
         env::set_var("SHELL", "true");
         env::set_var("MAT_SKIP_TERMINAL", "1");
 
         let app_name = APP_NAME;
-        let result = handle_create("fix", "typo", None, false, false, &config, &base_settings(), &git, &tmux, app_name, &repo_dir);
+        let result = handle_create(
+            "fix", "typo", None, false, &config, &git, &herdr, app_name, &repo_dir,
+        );
 
         match prev_shell {
             Some(s) => env::set_var("SHELL", s),
@@ -467,65 +456,125 @@ mod tests {
         Config::default()
     }
 
-    fn config_tmux(enabled: TmuxMode) -> Config {
+    fn config_herdr(enabled: HerdrMode) -> Config {
         Config {
-            tmux: TmuxConfig { enabled },
+            herdr: HerdrConfig { enabled },
             ..Config::default()
         }
     }
 
-    // ── Worktree + TMUX path ──────────────────────────────────────
+    // ── Worktree + Herdr path ──────────────────────────────────
 
     #[test]
-    fn test_worktree_tmux_path_full_flow() {
+    fn test_worktree_herdr_path_full_flow() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_worktree_tmux_uses_source_flag() {
+    fn test_worktree_herdr_uses_source_flag() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", Some("develop"), false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            Some("develop"),
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_worktree_tmux_worktree_add_failure() {
+    fn test_worktree_herdr_worktree_add_failure() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_error("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], MatError::Git {
-            command: "git worktree add".into(),
-            stderr: "fatal: already exists".into(),
-        });
+        mock.add_error(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
+            MatError::Git {
+                command: "git worktree add".into(),
+                stderr: "fatal: already exists".into(),
+            },
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(MockRunner::new());
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_err());
         match result.unwrap_err() {
             MatError::Git { ref stderr, .. } => assert!(stderr.contains("already exists")),
@@ -534,28 +583,57 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_tmux_uses_default_branch_from_config_when_auto_detect_fails() {
+    fn test_worktree_herdr_uses_default_branch_from_config_when_auto_detect_fails() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
-        mock.add_error("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], MatError::Git {
-            command: "git symbolic-ref".into(),
-            stderr: "no upstream".into(),
-        });
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_error(
+            "git",
+            &["symbolic-ref", "refs/remotes/origin/HEAD"],
+            MatError::Git {
+                command: "git symbolic-ref".into(),
+                stderr: "no upstream".into(),
+            },
+        );
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
+        let herdr = HerdrClient::new(mock);
         let config = Config {
             default_branch: "develop".into(),
-            tmux: TmuxConfig { enabled: TmuxMode::Always },
+            herdr: HerdrConfig {
+                enabled: HerdrMode::Always,
+            },
             ..Config::default()
         };
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
@@ -564,15 +642,37 @@ mod tests {
     #[test]
     fn test_no_worktree_with_stash() {
         let mut mock = MockRunner::new();
-        mock.add_response("git", &["status", "--porcelain"], ok_output(" M src/file.rs\n"));
-        mock.add_response("git", &["stash", "push", "-m", "mat:auto:feat/login"], ok_output(""));
-        mock.add_response("git", &["checkout", "-b", "feat/login", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["status", "--porcelain"],
+            ok_output(" M src/file.rs\n"),
+        );
+        mock.add_response(
+            "git",
+            &["stash", "push", "-m", "mat:auto:feat/login"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "git",
+            &["checkout", "-b", "feat/login", "main"],
+            ok_output(""),
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            Some("main"),
+            true,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
@@ -580,13 +680,27 @@ mod tests {
     fn test_no_worktree_no_uncommitted_changes() {
         let mut mock = MockRunner::new();
         mock.add_response("git", &["status", "--porcelain"], ok_output(""));
-        mock.add_response("git", &["checkout", "-b", "feat/login", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["checkout", "-b", "feat/login", "main"],
+            ok_output(""),
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            Some("main"),
+            true,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
@@ -594,13 +708,27 @@ mod tests {
     fn test_no_worktree_worktree_add_not_called() {
         let mut mock = MockRunner::new();
         mock.add_response("git", &["status", "--porcelain"], ok_output(""));
-        mock.add_response("git", &["checkout", "-b", "feat/login", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["checkout", "-b", "feat/login", "main"],
+            ok_output(""),
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            Some("main"),
+            true,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
@@ -608,105 +736,129 @@ mod tests {
     fn test_no_worktree_stash_not_called_when_clean() {
         let mut mock = MockRunner::new();
         mock.add_response("git", &["status", "--porcelain"], ok_output(""));
-        mock.add_response("git", &["checkout", "-b", "feat/login", "main"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["checkout", "-b", "feat/login", "main"],
+            ok_output(""),
+        );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_create("feat", "login", Some("main"), true, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
-        assert!(result.is_ok());
-    }
-
-    // ── Worktree shell (no-tmux) path ─────────────────────────────
-
-    #[test]
-    fn test_worktree_shell_path_worktree_add_called_tmux_not_called() {
-        let result = run_shell_path(config_tmux(TmuxMode::Never));
-        assert!(result.is_ok());
-    }
-
-    // ── Tmux mode config ──────────────────────────────────────────
-
-    #[test]
-    fn test_tmux_enabled_never_forces_no_tmux() {
-        let result = run_shell_path(config_tmux(TmuxMode::Never));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_tmux_enabled_never_overrides_use_tmux_flag() {
-        let config = config_tmux(TmuxMode::Never);
-        let tmp = std::env::temp_dir().join("mat_test_create_override");
-        let repo_dir = tmp.join("repo");
-        let tree_path = format!(
-            "{}.worktree/{}-feat/login",
-            repo_dir.to_string_lossy(),
-            APP_NAME
+        let result = handle_create(
+            "feat",
+            "login",
+            Some("main"),
+            true,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
         );
-        std::fs::create_dir_all(&tree_path).unwrap();
+        assert!(result.is_ok());
+    }
 
-        let mut mock = MockRunner::new();
-        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
+    // ── Worktree shell (no-herdr) path ─────────────────────────
 
-        let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
-        let prev_shell = env::var("SHELL").ok();
-        let prev_skip_terminal = env::var("MAT_SKIP_TERMINAL").ok();
-        env::set_var("SHELL", "true");
-        env::set_var("MAT_SKIP_TERMINAL", "1");
+    #[test]
+    fn test_worktree_shell_path_worktree_add_called_herdr_not_called() {
+        let result = run_shell_path(config_herdr(HerdrMode::Never));
+        assert!(result.is_ok());
+    }
 
-        let result = handle_create("feat", "login", None, false, true, &config, &base_settings(), &git, &tmux, APP_NAME, &repo_dir);
+    // ── Herdr mode config ──────────────────────────────────────────
 
-        match prev_shell {
-            Some(s) => env::set_var("SHELL", s),
-            None => env::remove_var("SHELL"),
-        }
-        match prev_skip_terminal {
-            Some(s) => env::set_var("MAT_SKIP_TERMINAL", s),
-            None => env::remove_var("MAT_SKIP_TERMINAL"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-
+    #[test]
+    fn test_herdr_enabled_never_forces_no_herdr() {
+        let result = run_shell_path(config_herdr(HerdrMode::Never));
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_tmux_enabled_always_forces_tmux_even_without_env() {
+    fn test_herdr_enabled_always_forces_herdr_even_without_env() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_tmux_enabled_always_fails_when_tmux_not_running() {
+    fn test_herdr_enabled_always_fails_when_herdr_not_running() {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "main"], ok_output(""));
-        mock.add_error("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], MatError::Tmux {
-            command: "tmux new-window".into(),
-            stderr: "no server running".into(),
-        });
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
+            ok_output(""),
+        );
+        mock.add_error(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            MatError::Herdr {
+                command: "herdr workspace create".into(),
+                stderr: "no server running".into(),
+            },
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
-        assert!(result.is_err());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
+        assert!(result.is_ok());
     }
 
     // ── Default branch resolution ─────────────────────────────────
@@ -716,58 +868,81 @@ mod tests {
         let mut mock = MockRunner::new();
         let tree_path = wt("chore", "update");
         mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
-        mock.add_error("git", &["symbolic-ref", "refs/remotes/origin/HEAD"], MatError::Git {
-            command: "git symbolic-ref".into(),
-            stderr: "no upstream".into(),
-        });
-        mock.add_response("git", &["worktree", "add", "-b", "chore/update", &tree_path, "develop"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-chore/update"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_error(
+            "git",
+            &["symbolic-ref", "refs/remotes/origin/HEAD"],
+            MatError::Git {
+                command: "git symbolic-ref".into(),
+                stderr: "no upstream".into(),
+            },
+        );
+        mock.add_response(
+            "git",
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "chore/update",
+                &tree_path,
+                "develop",
+            ],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-chore/update",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
+        let herdr = HerdrClient::new(mock);
         let config = Config {
             default_branch: "develop".into(),
-            tmux: TmuxConfig { enabled: TmuxMode::Always },
+            herdr: HerdrConfig {
+                enabled: HerdrMode::Always,
+            },
             ..Config::default()
         };
 
-        let result = handle_create("chore", "update", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "chore",
+            "update",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 
-    // ── should_use_tmux ───────────────────────────────────────────
+    // ── should_use_herdr ───────────────────────────────────────────
 
     #[test]
-    fn test_should_use_tmux_never() {
-        let config = config_tmux(TmuxMode::Never);
-        assert!(!should_use_tmux(&config, false));
-        assert!(!should_use_tmux(&config, true));
+    fn test_should_use_herdr_never() {
+        let config = config_herdr(HerdrMode::Never);
+        assert!(!should_use_herdr(&config));
     }
 
     #[test]
-    fn test_should_use_tmux_always() {
-        let config = config_tmux(TmuxMode::Always);
-        assert!(should_use_tmux(&config, false));
-        assert!(should_use_tmux(&config, true));
+    fn test_should_use_herdr_always() {
+        let config = config_herdr(HerdrMode::Always);
+        assert!(should_use_herdr(&config));
     }
 
     #[test]
-    fn test_should_use_tmux_auto_with_flag() {
-        let config = config_tmux(TmuxMode::Auto);
-        assert!(should_use_tmux(&config, true));
-    }
-
-    #[test]
-    fn test_should_use_tmux_auto_without_flag_and_no_tmux_env() {
-        let config = config_tmux(TmuxMode::Auto);
-        let old_tmux = env::var("TMUX").ok();
-        env::remove_var("TMUX");
-        assert!(!should_use_tmux(&config, false));
-        if let Some(val) = old_tmux {
-            env::set_var("TMUX", val);
-        }
+    fn test_should_use_herdr_auto() {
+        let config = config_herdr(HerdrMode::Auto);
+        assert!(!should_use_herdr(&config));
     }
 
     #[test]
@@ -775,16 +950,39 @@ mod tests {
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("develop\n"));
-        mock.add_response("git", &["worktree", "add", "-b", "feat/login", &tree_path, "develop"], ok_output(""));
-        mock.add_response("tmux", &["new-window", "-c", &tree_path, "-P", "-F", "#{window_index}"], ok_output("2\n"));
-        mock.add_response("tmux", &["rename-window", "app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["send-keys", "-t", "2.0", &format!("cd \"{}\"", tree_path), "Enter"], ok_output(""));
+        mock.add_response(
+            "git",
+            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &[
+                "workspace",
+                "create",
+                "--cwd",
+                &tree_path,
+                "--label",
+                "app-feat/login",
+            ],
+            ok_output("ws-1\n"),
+        );
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux(TmuxMode::Always);
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
 
-        let result = handle_create("feat", "login", None, false, false, &config, &base_settings(), &git, &tmux, APP_NAME, repo());
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
         assert!(result.is_ok());
     }
 }

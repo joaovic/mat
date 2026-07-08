@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub enum MatError {
     Git { command: String, stderr: String },
-    Tmux { command: String, stderr: String },
+    Herdr { command: String, stderr: String },
     Config { key: String, reason: String },
     Validation { message: String },
     Io(Arc<std::io::Error>),
@@ -19,8 +19,8 @@ impl fmt::Display for MatError {
             MatError::Git { command, stderr } => {
                 write!(f, "Git command '{}' failed: {}", command, stderr.trim())
             }
-            MatError::Tmux { command, stderr } => {
-                write!(f, "Tmux command '{}' failed: {}", command, stderr.trim())
+            MatError::Herdr { command, stderr } => {
+                write!(f, "Herdr command '{}' failed: {}", command, stderr.trim())
             }
             MatError::Config { key, reason } => {
                 write!(f, "Config error for '{}': {}", key, reason)
@@ -82,13 +82,13 @@ mod tests {
     }
 
     #[test]
-    fn test_tmux_error_display_shows_command_and_stderr() {
-        let err = MatError::Tmux {
-            command: "tmux new-window".into(),
+    fn test_herdr_error_display_shows_command_and_stderr() {
+        let err = MatError::Herdr {
+            command: "herdr workspace create".into(),
             stderr: "no server running\n".into(),
         };
         let msg = err.to_string();
-        assert!(msg.contains("tmux new-window"));
+        assert!(msg.contains("herdr workspace create"));
         assert!(msg.contains("no server running"));
     }
 

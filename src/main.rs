@@ -5,7 +5,7 @@ mod display;
 mod error;
 mod git;
 mod naming;
-mod tmux;
+mod herdr;
 
 use crate::cli::Command as CliCmd;
 use crate::display::print_error;
@@ -27,13 +27,12 @@ fn main() {
             task_name,
             source,
             no_worktree,
-            use_tmux,
         } => {
             let r = (|| -> Result<(), MatError> {
                 let config = crate::config::Config::load()?;
                 let settings = crate::config::Settings::load()?;
                 let git = crate::git::GitClient::new(crate::git::RealRunner);
-                let tmux = crate::tmux::TmuxClient::new(crate::git::RealRunner);
+                let herdr = crate::herdr::HerdrClient::new(crate::git::RealRunner);
                 let app_name = naming::get_app_name();
                 let current_dir = env::current_dir()?;
                 commands::create::handle_create(
@@ -41,11 +40,10 @@ fn main() {
                     &task_name,
                     source.as_deref(),
                     no_worktree,
-                    use_tmux,
                     &config,
                     &settings,
                     &git,
-                    &tmux,
+                    &herdr,
                     &app_name,
                     &current_dir,
                 )
@@ -56,9 +54,9 @@ fn main() {
             let r = (|| -> Result<(), MatError> {
                 let config = crate::config::Config::load()?;
                 let git = crate::git::GitClient::new(crate::git::RealRunner);
-                let tmux = crate::tmux::TmuxClient::new(crate::git::RealRunner);
+                let herdr = crate::herdr::HerdrClient::new(crate::git::RealRunner);
                 let current_dir = env::current_dir()?;
-                commands::close::handle_close(no_merge, &config, &git, &tmux, &current_dir)
+                commands::close::handle_close(no_merge, &config, &git, &herdr, &current_dir)
             })();
             r
         }
