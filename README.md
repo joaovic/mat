@@ -1,33 +1,30 @@
 # mat - Multi-Agent Task CLI
 
-A CLI tool that streamlines feature development using Git worktrees and TMUX integration.
+A CLI tool that streamlines feature development using Git worktrees and Herdr integration.
 
 ## Overview
 
-`mat` (Multi-Agent Task) manages your development workflow by creating isolated Git worktrees for new features or tasks, optionally integrated with TMUX. Inspired by tools in the Git worktree ecosystem, `mat` implements its own native workflow directly on top of Git commands.
+`mat` (Multi-Agent Task) manages your development workflow by creating isolated Git worktrees for new features or tasks, optionally integrated with Herdr (terminal workspace manager). Inspired by tools in the Git worktree ecosystem, `mat` implements its own native workflow directly on top of Git commands.
 
 It will:
 
-1. Check prerequisites (Git repo, optional TMUX)
+1. Check prerequisites (Git repo, optional Herdr)
 2. Create a new Git branch and worktree (or just a branch with `--no-worktree`)
-3. Open a new TMUX window in the worktree directory (when available)
-4. Name the window following the pattern: `{app}-{type}/{name}`
-5. Copy a `cd` command to TMUX buffer for easy access from other panels
+3. Create a new Herdr workspace in the worktree directory (when available)
+4. Name the workspace following the pattern: `{app}-{type}/{name}`
 
 ## Requirements
 
 - **Git** — Current directory must be a Git repository
-- **TMUX / PSMUX** — Optional, for window management (auto-detected)
+- **Herdr** (optional) — Terminal workspace manager for AI coding agents. Install via:
+  ```bash
+  curl -fsSL https://herdr.dev/install.sh | sh
+  ```
+  When Herdr is not running, `mat` creates the worktree without workspace integration.
 
 ### Windows
 
-- **PSMUX** — Native Windows tmux replacement. Install via:
-  ```powershell
-  winget install psmux
-  # or: cargo install psmux
-  # or: scoop install psmux
-  ```
-  PSMUX installs `psmux.exe`, `pmux.exe`, and `tmux.exe` — all identical. `mat` calls `tmux`, so it works immediately.
+Windows support is currently limited to Git worktree management (Herdr workspace creation is skipped on Windows).
 
 ## Installation
 
@@ -35,7 +32,7 @@ It will:
 
 ```bash
 cargo build --release
-cp target/release/mat ~/local/bin/mat
+cp target/release/mat /usr/local/bin/mat
 ```
 
 ### Windows (native build)
@@ -81,7 +78,6 @@ cargo build --release --target x86_64-pc-windows-gnu
 |--------|-------------|
 | `-s, --source <branch>` | Base branch to create from (defaults to current branch) |
 | `--no-worktree` | Skip worktree creation, only create a branch |
-| `--use-tmux` | Force TMUX window creation even outside TMUX |
 
 #### Examples
 
@@ -105,21 +101,14 @@ mat create fix hotfix --no-worktree
 #### Output Example
 
 ```
-ℹ Running prerequisite checks...
-✓ Current directory is a git repository
-ℹ Creating worktree: name=dashboard-feat/increase-counter, source=main, branch=feat/increase-counter
+✓ Git repository detected
+ℹ Creating worktree: branch feat/increase-counter from main
 ✓ Worktree created at: /path/to/project.worktree/dashboard-feat/increase-counter
-✓ TMUX window created
-✓ Window renamed to: dashboard-feat/increase-counter
-✓ CD command copied to TMUX buffer
 
-✓ Ready! Window 'dashboard-feat/increase-counter' is now open at: /path/to/project.worktree/dashboard-feat/increase-counter
-
-💡 To cd into the new worktree from other TMUX panels:
-  Press [Ctrl-a] then ] to paste the cd command
+✓ Ready! Worktree created at: /path/to/project.worktree/dashboard-feat/increase-counter
 ```
 
-> Note: The TMUX prefix (Ctrl-a, Ctrl-b, etc.) is automatically detected from your TMUX configuration.
+> When Herdr is running, a new workspace is also created with the worktree as its working directory.
 
 ### Close a task
 
@@ -176,7 +165,7 @@ mat config set --global <key> <value>
 | `delete_branch` | Delete branch after close | `true` |
 | `merge_strategy` | `merge-commit` or `fast-forward` | `merge-commit` |
 | `worktree_root` | Custom worktree path template | `{repo}.worktree/{name}` |
-| `tmux.enabled` | `auto`, `always`, or `never` | `auto` |
+| `herdr.enabled` | `auto`, `always`, or `never` | `auto` |
 
 #### Example `.mat.toml`
 
@@ -185,19 +174,32 @@ default_branch = "develop"
 merge_strategy = "fast-forward"
 ```
 
-## Window Naming Convention
+## Worktree Naming Convention
 
-Windows are named following this pattern:
+Worktree directories follow this pattern:
 
 ```
-{app-name}-{type}/{name}
+{app-name}.worktree/{app-name}-{type}/{name}
 ```
 
-Example: For app `dashboard`, running `mat feat increase-counter`, the window will be named `dashboard-feat/increase-counter`.
+Example: For app `dashboard`, running `mat feat increase-counter`, the worktree will be at `dashboard.worktree/dashboard-feat/increase-counter`.
+
+## Herdr Integration
+
+When Herdr is running and `herdr.enabled` is not `never`, `mat create` also:
+
+1. Creates a new Herdr workspace via `herdr workspace create --cwd <path> --label <name>`
+2. The workspace is automatically cleaned up by `mat close`
+
+### Disabling Herdr integration
+
+```bash
+mat config set --global herdr.enabled never
+```
 
 ## Inspirations
 
-The workflow design was inspired by ideas from the Git worktree tooling ecosystem, particularly the ergonomics of managing per-feature worktrees. `mat` implements its own native Git worktree management and adds integrated configuration, auto-merge on close, and flexible TMUX handling.
+The workflow design was inspired by ideas from the Git worktree tooling ecosystem, particularly the ergonomics of managing per-feature worktrees. `mat` implements its own native Git worktree management and adds integrated configuration, auto-merge on close, and flexible terminal workspace handling.
 
 ## License
 

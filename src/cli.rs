@@ -9,7 +9,6 @@ pub enum Command {
         task_name: String,
         source: Option<String>,
         no_worktree: bool,
-        use_tmux: bool,
     },
     Close {
         no_merge: bool,
@@ -26,8 +25,8 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.3.0")]
-#[command(about = "Multi-Agent Task - Create TMUX window + Git worktree for new features", long_about = None)]
+#[command(name = "mat", version = "0.4.0")]
+#[command(about = "Multi-Agent Task - Create Git worktree for new features with herdr workspace support", long_about = None)]
 struct Cli {
     #[arg(short = 'c', long, help = "Close the current task worktree (deprecated, use 'mat close')")]
     close: bool,
@@ -54,9 +53,6 @@ enum MatCommand {
 
         #[arg(long, help = "Skip worktree creation, only create branch")]
         no_worktree: bool,
-
-        #[arg(long, help = "Force tmux window creation even outside tmux")]
-        use_tmux: bool,
     },
     /// Close the current task worktree
     Close {
@@ -117,13 +113,11 @@ fn cli_to_command(cli: Cli) -> Result<Command, MatError> {
             task_name,
             source,
             no_worktree,
-            use_tmux,
         }) => Ok(Command::Create {
             task_type,
             task_name,
             source,
             no_worktree,
-            use_tmux,
         }),
         Some(MatCommand::Close { no_merge }) => Ok(Command::Close { no_merge }),
         Some(MatCommand::Config { command }) => match command {
@@ -152,7 +146,6 @@ mod tests {
                 task_name: "login".into(),
                 source: None,
                 no_worktree: false,
-                use_tmux: false,
             }
         );
     }
@@ -168,7 +161,6 @@ mod tests {
                 task_name: "bug".into(),
                 source: None,
                 no_worktree: true,
-                use_tmux: false,
             }
         );
     }
@@ -184,7 +176,6 @@ mod tests {
                 task_name: "login".into(),
                 source: Some("develop".into()),
                 no_worktree: false,
-                use_tmux: false,
             }
         );
     }
@@ -203,14 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_with_use_tmux() {
-        let cli = Cli::try_parse_from(["mat", "create", "feat", "login", "--use-tmux"]).unwrap();
-        let cmd = cli_to_command(cli).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Create { use_tmux: true, .. }
-        ));
-    }
+
 
     #[test]
     fn test_close_subcommand() {

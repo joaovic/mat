@@ -1,19 +1,19 @@
 use std::env;
 use std::path::Path;
 
-use crate::config::{Config, TmuxMode};
+use crate::config::{Config, HerdrMode};
 use crate::display::{print_error, print_info, print_success, print_tip, print_warning};
 use crate::error::MatError;
 use crate::config::MergeStrategy;
 use crate::git::{CommandRunner, GitClient};
 use crate::naming;
-use crate::tmux::TmuxClient;
+use crate::herdr::HerdrClient;
 
-fn should_use_tmux(config: &Config) -> bool {
-    match config.tmux.enabled {
-        TmuxMode::Never => false,
-        TmuxMode::Always => true,
-        TmuxMode::Auto => env::var("TMUX").is_ok(),
+fn should_use_herdr(config: &Config) -> bool {
+    match config.herdr.enabled {
+        HerdrMode::Never => false,
+        HerdrMode::Always => true,
+        HerdrMode::Auto => false,
     }
 }
 
@@ -87,7 +87,7 @@ pub fn handle_close<R: CommandRunner>(
     no_merge: bool,
     config: &Config,
     git: &GitClient<R>,
-    tmux: &TmuxClient<R>,
+    herdr: &HerdrClient<R>,
     current_dir: &Path,
 ) -> Result<(), MatError> {
     print_info("Checking for uncommitted changes...");
@@ -187,17 +187,15 @@ pub fn handle_close<R: CommandRunner>(
         )?
     };
 
-    // Step 4: Close tmux window (before worktree remove — releases Windows worktree lock)
-    let use_tmux = should_use_tmux(config);
+    // Step 4: Close herdr workspace (before worktree remove — releases Windows worktree lock)
+    let use_herdr = should_use_herdr(config);
 
-    if no_merge && use_tmux {
-        let merge_cmd = format!("git merge {}", branch_name);
-        let _ = tmux.set_buffer(&merge_cmd);
-    }
-
-    if use_tmux {
-        tmux.close_current_window()?;
-        print_success("TMUX window closed");
+    if use_herdr {
+        let path_str = naming::normalize_path(&current_dir);
+        if let Ok(Some(ws_id)) = herdr.find_workspace_by_path(&path_str) {
+            herdr.close_workspace(&ws_id)?;
+            print_success("Herdr workspace closed");
+        }
     }
 
     // Step 5: Change to original directory to release worktree lock, then delete worktree
@@ -238,7 +236,7 @@ pub fn handle_close<R: CommandRunner>(
         ));
     }
 
-    if maybe_worktree_path.is_some() && !use_tmux {
+    if maybe_worktree_path.is_some() && !use_herdr {
         print_tip("Worktree directory deleted. Type 'exit' to close this tab.");
     }
 
@@ -248,7 +246,7 @@ pub fn handle_close<R: CommandRunner>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MergeStrategy;
+    use crate::config::{HerdrConfig, MergeStrategy};
     use crate::git::{CommandOutput, MockRunner};
     use std::path::PathBuf;
 
@@ -369,19 +367,17 @@ branch refs/heads/feat/login
         );
     }
 
-    fn tmux_close_mocks(mock: &mut MockRunner) {
+    fn herdr_close_mocks(mock: &mut MockRunner, path: &str, ws_id: &str) {
         mock.add_response(
-            "tmux",
-            &["list-windows", "-F", "#{window_index}"],
-            ok_output("0\n1\n"),
+            "herdr",
+            &["workspace", "list"],
+            ok_output(&format!("{}\t{}\tlabel", ws_id, path)),
         );
         mock.add_response(
-            "tmux",
-            &["display-message", "-p", "#{window_index}"],
-            ok_output("1\n"),
+            "herdr",
+            &["workspace", "close", ws_id],
+            ok_output(""),
         );
-        mock.add_response("tmux", &["select-window", "-t", "0"], ok_output(""));
-        mock.add_response("tmux", &["kill-window", "-t", "1"], ok_output(""));
     }
 
     fn cwd_in_worktree() -> PathBuf {
@@ -392,33 +388,19 @@ branch refs/heads/feat/login
         PathBuf::from("/repo")
     }
 
-    fn run_with_tmux_env<F, R>(f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let old = std::env::var("TMUX").ok();
-        std::env::set_var("TMUX", "/tmp/test-tmux");
-        let result = f();
-        match old {
-            Some(v) => std::env::set_var("TMUX", v),
-            None => std::env::remove_var("TMUX"),
-        }
-        result
-    }
-
-    fn config_tmux_never() -> Config {
+    fn config_herdr_never() -> Config {
         Config {
-            tmux: crate::config::TmuxConfig {
-                enabled: TmuxMode::Never,
+            herdr: crate::config::HerdrConfig {
+                enabled: HerdrMode::Never,
             },
             ..Config::default()
         }
     }
 
-    fn config_tmux_always() -> Config {
+    fn config_herdr_always() -> Config {
         Config {
-            tmux: crate::config::TmuxConfig {
-                enabled: TmuxMode::Always,
+            herdr: crate::config::HerdrConfig {
+                enabled: HerdrMode::Always,
             },
             ..Config::default()
         }
@@ -432,10 +414,10 @@ branch refs/heads/feat/login
         mock.add_response("git", &["status", "--porcelain"], ok_output(" M src/file.rs\n"));
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_err());
         match result.unwrap_err() {
             MatError::Validation { ref message } => {
@@ -454,15 +436,13 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -478,15 +458,17 @@ branch refs/heads/feat/login
             ok_output("/original/cwd\n"),
         );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_no_delete();
+        let herdr = HerdrClient::new(mock);
+        let config = Config {
+            delete_branch: false,
+            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            ..Config::default()
+        };
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -498,15 +480,17 @@ branch refs/heads/feat/login
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         // No branch -d mock = test will fail if branch_delete is called
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_no_delete();
+        let herdr = HerdrClient::new(mock);
+        let config = Config {
+            delete_branch: false,
+            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            ..Config::default()
+        };
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -519,15 +503,13 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -538,15 +520,17 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::FastForward);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_ff();
+        let herdr = HerdrClient::new(mock);
+        let config = Config {
+            merge_strategy: MergeStrategy::FastForward,
+            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            ..Config::default()
+        };
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -570,10 +554,10 @@ branch refs/heads/feat/login
         // No worktree_remove or branch_delete mocks — should not be called
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_err());
         match result.unwrap_err() {
             MatError::Validation { ref message } => {
@@ -586,7 +570,7 @@ branch refs/heads/feat/login
     // ── --no-merge path ──────────────────────────────────────────
 
     #[test]
-    fn test_no_merge_skips_merge_and_copies_to_buffer() {
+    fn test_no_merge_skips_merge_and_closes_herdr() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
@@ -598,16 +582,13 @@ branch refs/heads/feat/login
         );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(true, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -623,19 +604,18 @@ branch refs/heads/feat/login
             ok_output("/original/cwd\n"),
         );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
-        // No merge mock — merge should NOT be called
-        // No branch -d mock — delete_branch=true but we skip it intentionally in this test
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
-        // Use config_no_delete to avoid needing branch_delete mock
-        let config = config_no_delete();
+        // Use no_delete + herdr always to avoid needing branch_delete mock
+        let config = Config {
+            delete_branch: false,
+            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            ..Config::default()
+        };
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
+        let herdr = HerdrClient::new(mock);
 
-        let result = run_with_tmux_env(|| {
-            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(true, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -652,16 +632,13 @@ branch refs/heads/feat/login
         );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        mock.add_response("tmux", &["set-buffer", "git merge feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(true, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(true, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -699,16 +676,14 @@ branch refs/heads/main
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         // branch_delete
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        // tmux close
-        tmux_close_mocks(&mut mock);
+        // herdr close
+        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_repo());
         assert!(result.is_ok());
     }
 
@@ -743,10 +718,10 @@ branch refs/heads/main
         );
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
+        let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_repo());
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_repo());
         assert!(result.is_err());
     }
 
@@ -783,15 +758,13 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_repo());
         assert!(result.is_ok());
     }
 
@@ -820,72 +793,68 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_repo())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_repo());
         assert!(result.is_ok());
     }
 
-    // ── close_current_window called after cleanup ───────────────
+    // ── close workspace called after cleanup ────────────────────
 
     #[test]
-    fn test_close_window_called_after_cleanup() {
+    fn test_close_workspace_called_after_cleanup() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
-    // ── Tmux guard behavior ─────────────────────────────────────
+    // ── Herdr guard behavior ──────────────────────────────────
 
     #[test]
-    fn test_close_skips_tmux_when_config_never() {
+    fn test_close_skips_herdr_when_config_never() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        // No tmux mocks needed — tmux should not be touched
+        // No herdr mocks needed — herdr should not be touched
 
         let git = GitClient::new(mock);
-        let tmux = TmuxClient::new(MockRunner::new());
-        let config = config_tmux_never();
+        let herdr = HerdrClient::new(MockRunner::new());
+        let config = config_herdr_never();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_close_uses_tmux_when_config_always() {
+    fn test_close_uses_herdr_when_config_always() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_tmux_always();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = handle_close(false, &config, &git, &tmux, &cwd_in_worktree());
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -904,15 +873,13 @@ branch refs/heads/main
         // default_branch should NOT be called since config has the value
         successful_merge_from_mocks(&mut mock, "feat/login", "develop", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        tmux_close_mocks(&mut mock);
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = base_config();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 
@@ -925,7 +892,7 @@ branch refs/heads/main
     }
 
     #[test]
-    fn test_handle_close_no_tmux_error_does_not_crash() {
+    fn test_handle_close_no_herdr_error_does_not_crash() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
@@ -937,19 +904,14 @@ branch refs/heads/main
         );
         mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        // tmux errors should propagate
-        mock.add_response("tmux", &["list-windows", "-F", "#{window_index}"], ok_output("0\n1\n"));
-        mock.add_response("tmux", &["display-message", "-p", "#{window_index}"], ok_output("1\n"));
-        mock.add_response("tmux", &["select-window", "-t", "0"], ok_output(""));
-        mock.add_response("tmux", &["kill-window", "-t", "1"], ok_output(""));
+        // herdr errors should propagate
+        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
-        let tmux = TmuxClient::new(mock);
-        let config = config_no_delete();
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_always();
 
-        let result = run_with_tmux_env(|| {
-            handle_close(false, &config, &git, &tmux, &cwd_in_worktree())
-        });
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
     }
 }

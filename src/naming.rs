@@ -7,7 +7,6 @@ use crate::config::Config;
 pub struct Names {
     pub branch_name: String,
     pub worktree_name: String,
-    pub window_name: String,
     pub worktree_path: PathBuf,
 }
 
@@ -38,7 +37,6 @@ pub fn generate_names(
 ) -> Names {
     let branch_name = format!("{}/{}", task_type, task_name);
     let worktree_name = format!("{}-{}/{}", app_name, task_type, task_name);
-    let window_name = worktree_name.clone();
 
     let worktree_path = if let Some(ref root) = config.worktree_root {
         let expanded = root
@@ -54,7 +52,6 @@ pub fn generate_names(
     Names {
         branch_name,
         worktree_name,
-        window_name,
         worktree_path,
     }
 }
@@ -79,11 +76,7 @@ mod tests {
         assert_eq!(names.branch_name, "feat/login");
     }
 
-    #[test]
-    fn test_window_name_matches_worktree_name() {
-        let names = generate_names("dashboard", "feat", "login", &default_config(), Path::new("/repo"));
-        assert_eq!(names.window_name, "dashboard-feat/login");
-    }
+
 
     #[test]
     fn test_different_task_type_produces_different_worktree_name() {
