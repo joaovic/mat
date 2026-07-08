@@ -20,7 +20,7 @@ pub fn handle_config_get(key: &str) -> Result<(), MatError> {
         "delete_branch",
         "merge_strategy",
         "worktree_root",
-        "tmux.enabled",
+        "herdr.enabled",
     ];
 
     if !valid_keys.contains(&key) {
@@ -55,7 +55,7 @@ pub fn handle_config_set(key: &str, value: &str, global: bool) -> Result<(), Mat
         "delete_branch",
         "merge_strategy",
         "worktree_root",
-        "tmux.enabled",
+        "herdr.enabled",
     ];
 
     if !valid_keys.contains(&key) {
@@ -93,13 +93,13 @@ pub fn handle_config_set(key: &str, value: &str, global: bool) -> Result<(), Mat
         }
     }
 
-    if key == "tmux.enabled" {
+    if key == "herdr.enabled" {
         match value {
             "auto" | "always" | "never" => {}
             _ => {
                 return Err(MatError::Config {
                     key: key.into(),
-                    reason: "tmux.enabled must be 'auto', 'always', or 'never'".into(),
+                    reason: "herdr.enabled must be 'auto', 'always', or 'never'".into(),
                 });
             }
         }
@@ -128,13 +128,13 @@ mod tests {
             "delete_branch",
             "merge_strategy",
             "worktree_root",
-            "tmux.enabled",
+            "herdr.enabled",
         ];
         assert!(valid_keys.contains(&"default_branch"));
         assert!(valid_keys.contains(&"delete_branch"));
         assert!(valid_keys.contains(&"merge_strategy"));
         assert!(valid_keys.contains(&"worktree_root"));
-        assert!(valid_keys.contains(&"tmux.enabled"));
+        assert!(valid_keys.contains(&"herdr.enabled"));
         assert!(!valid_keys.contains(&"invalid"));
     }
 
@@ -169,11 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_config_set_tmux_enabled_validation() {
-        let result = handle_config_set("tmux.enabled", "invalid", false);
+    fn test_handle_config_set_herdr_enabled_validation() {
+        let result = handle_config_set("herdr.enabled", "invalid", false);
         assert!(result.is_err());
         match result.unwrap_err() {
-            MatError::Config { key, .. } => assert_eq!(key, "tmux.enabled"),
+            MatError::Config { key, .. } => assert_eq!(key, "herdr.enabled"),
             _ => panic!("expected MatError::Config"),
         }
     }
