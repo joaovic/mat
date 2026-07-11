@@ -1,5 +1,15 @@
+use serde::Deserialize;
+
 use crate::error::MatError;
 use crate::git::CommandRunner;
+
+#[derive(Debug)]
+pub struct WorktreeCreate {
+    pub workspace_id: String,
+    #[allow(dead_code)]
+    pub branch: String,
+    pub path: String,
+}
 
 pub struct HerdrClient<R: CommandRunner> {
     runner: R,
@@ -18,53 +28,213 @@ impl<R: CommandRunner> HerdrClient<R> {
         }
     }
 
-    pub fn create_workspace(&self, path: &str, label: &str) -> Result<String, MatError> {
-        let output = self.run_herdr(&["workspace", "create", "--cwd", path, "--label", label])?;
-        let id = output.stdout.trim().to_string();
-        Ok(id)
-    }
-
-    pub fn find_workspace_by_path(&self, path: &str) -> Result<Option<String>, MatError> {
-        let output = match self.run_herdr(&["workspace", "list"]) {
-            Ok(o) => o,
-            Err(MatError::Herdr { ref stderr, .. }) if stderr.contains("server is not running") => {
-                return Ok(None);
-            }
-            Err(e) => return Err(e),
-        };
-
-        for line in output.stdout.lines() {
-            if line.contains(path) {
-                let id = line.split_whitespace().next().unwrap_or("").to_string();
-                if !id.is_empty() {
-                    return Ok(Some(id));
-                }
-            }
+    pub fn create_worktree(
+        &self,
+        cwd: &str,
+        branch: &str,
+        base: &str,
+        label: &str,
+        path: Option<&str>,
+    ) -> Result<WorktreeCreate, MatError> {
+        let mut args: Vec<&str> = vec![
+            "worktree",
+            "create",
+            "--cwd",
+            cwd,
+            "--branch",
+            branch,
+            "--base",
+            base,
+            "--label",
+            label,
+            "--no-focus",
+            "--json",
+        ];
+        if let Some(p) = path {
+            args.push("--path");
+            args.push(p);
         }
-        Ok(None)
+        let output = self.run_herdr(&args)?;
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct CreateOutput {
+            result: CreateResult,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct CreateResult {
+            workspace: WorkspacePart,
+            worktree: WorktreePart,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct WorkspacePart {
+            workspace_id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct WorktreePart {
+            branch: String,
+            path: String,
+        }
+
+        let parsed: CreateOutput = serde_json::from_str(&output.stdout).map_err(|e| {
+            MatError::Herdr {
+                command: format!("herdr {}", args.join(" ")),
+                stderr: format!("failed to parse JSON: {}", e),
+            }
+        })?;
+
+        Ok(WorktreeCreate {
+            workspace_id: parsed.result.workspace.workspace_id,
+            branch: parsed.result.worktree.branch,
+            path: parsed.result.worktree.path,
+        })
     }
 
-    pub fn close_workspace(&self, id: &str) -> Result<(), MatError> {
-        self.run_herdr(&["workspace", "close", id])?;
+    pub fn remove_worktree(&self, workspace_id: &str, force: bool) -> Result<(), MatError> {
+        let mut args: Vec<&str> = vec!["worktree", "remove", "--workspace", workspace_id];
+        if force {
+            args.push("--force");
+        }
+        self.run_herdr(&args)?;
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn list_workspaces(&self) -> Result<Vec<String>, MatError> {
-        let output = self.run_herdr(&["workspace", "list"])?;
-        let ids = output
-            .stdout
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| {
-                l.split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string()
-            })
-            .filter(|id| !id.is_empty())
-            .collect();
-        Ok(ids)
+    pub fn current_workspace(&self) -> Result<String, MatError> {
+        let output = self.run_herdr(&["pane", "list"])?;
+
+        #[derive(Debug, Deserialize)]
+        struct PaneItem {
+            workspace_id: String,
+            focused: Option<bool>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct PaneListResult {
+            panes: Vec<PaneItem>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct PaneListOutput {
+            result: PaneListResult,
+        }
+
+        let parsed: PaneListOutput =
+            serde_json::from_str(&output.stdout).map_err(|e| MatError::Herdr {
+                command: "herdr pane list".into(),
+                stderr: format!("failed to parse JSON: {}", e),
+            })?;
+
+        let focused = parsed
+            .result
+            .panes
+            .iter()
+            .find(|p| p.focused.unwrap_or(false))
+            .or_else(|| parsed.result.panes.first());
+
+        match focused {
+            Some(p) => Ok(p.workspace_id.clone()),
+            None => Err(MatError::Herdr {
+                command: "herdr pane list".into(),
+                stderr: "no panes found".into(),
+            }),
+        }
+    }
+
+    pub fn tab_create(
+        &self,
+        workspace_id: &str,
+        label: Option<&str>,
+    ) -> Result<(String, String), MatError> {
+        let mut args = vec!["tab", "create", "--workspace", workspace_id];
+        if let Some(l) = label {
+            args.push("--label");
+            args.push(l);
+        }
+        let output = self.run_herdr(&args)?;
+
+        #[derive(Debug, Deserialize)]
+        struct TabPart {
+            tab_id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct PanePart {
+            pane_id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct TabCreateResult {
+            tab: TabPart,
+            root_pane: PanePart,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct TabCreateOutput {
+            result: TabCreateResult,
+        }
+
+        let parsed: TabCreateOutput =
+            serde_json::from_str(&output.stdout).map_err(|e| MatError::Herdr {
+                command: format!("herdr {}", args.join(" ")),
+                stderr: format!("failed to parse JSON: {}", e),
+            })?;
+
+        Ok((parsed.result.tab.tab_id, parsed.result.root_pane.pane_id))
+    }
+
+    pub fn pane_split(
+        &self,
+        pane_id: &str,
+        direction: &str,
+        no_focus: bool,
+    ) -> Result<String, MatError> {
+        let mut args = vec!["pane", "split", pane_id, "--direction", direction];
+        if no_focus {
+            args.push("--no-focus");
+        }
+        let output = self.run_herdr(&args)?;
+
+        #[derive(Debug, Deserialize)]
+        struct PanePart {
+            pane_id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct PaneSplitResult {
+            pane: PanePart,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct PaneSplitOutput {
+            result: PaneSplitResult,
+        }
+
+        let parsed: PaneSplitOutput =
+            serde_json::from_str(&output.stdout).map_err(|e| MatError::Herdr {
+                command: format!("herdr {}", args.join(" ")),
+                stderr: format!("failed to parse JSON: {}", e),
+            })?;
+
+        Ok(parsed.result.pane.pane_id)
+    }
+
+    pub fn tab_focus(&self, tab_id: &str) -> Result<(), MatError> {
+        self.run_herdr(&["tab", "focus", tab_id])?;
+        Ok(())
+    }
+
+    pub fn pane_run(&self, pane_id: &str, command: &str) -> Result<(), MatError> {
+        self.run_herdr(&["pane", "run", pane_id, command])?;
+        Ok(())
     }
 }
 
@@ -88,138 +258,304 @@ mod tests {
         HerdrClient::new(mock)
     }
 
+    fn create_worktree_json(ws_id: &str, branch: &str, path: &str) -> String {
+        format!(
+            r#"{{"result":{{"workspace":{{"workspace_id":"{}"}},"worktree":{{"branch":"{}","path":"{}"}}}}}}"#,
+            ws_id, branch, path
+        )
+    }
+
     #[test]
-    fn test_create_workspace_returns_id() {
+    fn test_create_worktree_returns_structured_data() {
         let mut mock = mock_herdr();
         mock.add_response(
             "herdr",
-            &["workspace", "create", "--cwd", "/path", "--label", "my-label"],
-            ok_output("ws-123\n"),
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                "/repo",
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
+            ok_output(&create_worktree_json("w1", "feat/login", "/home/.herdr/worktrees/mat/wt1")),
         );
         let herdr = client_with(mock);
-        assert_eq!(herdr.create_workspace("/path", "my-label").unwrap(), "ws-123");
+        let result = herdr
+            .create_worktree("/repo", "feat/login", "main", "app-feat/login", None)
+            .unwrap();
+        assert_eq!(result.workspace_id, "w1");
+        assert_eq!(result.branch, "feat/login");
+        assert_eq!(result.path, "/home/.herdr/worktrees/mat/wt1");
     }
 
     #[test]
-    fn test_list_workspaces_parses_ids() {
+    fn test_create_worktree_passes_custom_path() {
         let mut mock = mock_herdr();
         mock.add_response(
             "herdr",
-            &["workspace", "list"],
-            ok_output("ws-1  /path1  label1\nws-2  /path2  label2\n"),
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                "/repo",
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+                "--path",
+                "/custom/path",
+            ],
+            ok_output(&create_worktree_json("w2", "feat/login", "/custom/path")),
         );
         let herdr = client_with(mock);
-        assert_eq!(herdr.list_workspaces().unwrap(), vec!["ws-1", "ws-2"]);
+        let result = herdr
+            .create_worktree("/repo", "feat/login", "main", "app-feat/login", Some("/custom/path"))
+            .unwrap();
+        assert_eq!(result.path, "/custom/path");
     }
 
     #[test]
-    fn test_close_workspace_passes_id() {
-        let mut mock = mock_herdr();
-        mock.add_response("herdr", &["workspace", "close", "ws-1"], ok_output(""));
-        let herdr = client_with(mock);
-        herdr.close_workspace("ws-1").unwrap();
-    }
-
-    #[test]
-    fn test_find_workspace_by_path_finds_matching() {
-        let mut mock = mock_herdr();
-        mock.add_response(
-            "herdr",
-            &["workspace", "list"],
-            ok_output("ws-1  /some/path  label1\nws-2  /target/path  label2\n"),
-        );
-        let herdr = client_with(mock);
-        let result = herdr.find_workspace_by_path("/target/path").unwrap();
-        assert_eq!(result, Some("ws-2".to_string()));
-    }
-
-    #[test]
-    fn test_find_workspace_by_path_returns_none_when_not_found() {
-        let mut mock = mock_herdr();
-        mock.add_response(
-            "herdr",
-            &["workspace", "list"],
-            ok_output("ws-1  /some/path  label1\n"),
-        );
-        let herdr = client_with(mock);
-        let result = herdr.find_workspace_by_path("/other/path").unwrap();
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_find_workspace_by_path_returns_none_when_server_not_running() {
+    fn test_create_worktree_returns_error_on_herdr_failure() {
         let mut mock = mock_herdr();
         mock.add_error(
             "herdr",
-            &["workspace", "list"],
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                "/repo",
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
             MatError::Herdr {
-                command: "herdr workspace list".into(),
-                stderr: "Error: server is not running".into(),
+                command: "herdr worktree create".into(),
+                stderr: "server not running".into(),
             },
         );
         let herdr = client_with(mock);
-        let result = herdr.find_workspace_by_path("/path").unwrap();
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_create_workspace_returns_error_on_failure() {
-        let mut mock = mock_herdr();
-        mock.add_error(
-            "herdr",
-            &["workspace", "create", "--cwd", "/bad", "--label", "test"],
-            MatError::Herdr {
-                command: "herdr workspace create".into(),
-                stderr: "failed to create workspace".into(),
-            },
-        );
-        let herdr = client_with(mock);
-        let err = herdr.create_workspace("/bad", "test").unwrap_err();
+        let err = herdr
+            .create_worktree("/repo", "feat/login", "main", "app-feat/login", None)
+            .unwrap_err();
         match err {
             MatError::Herdr { ref stderr, .. } => {
-                assert!(stderr.contains("failed to create workspace"));
+                assert!(stderr.contains("server not running"));
             }
             _ => panic!("expected MatError::Herdr"),
         }
     }
 
     #[test]
-    fn test_list_workspaces_returns_error_on_failure() {
+    fn test_remove_worktree_passes_workspace_id() {
         let mut mock = mock_herdr();
-        mock.add_error(
+        mock.add_response(
             "herdr",
-            &["workspace", "list"],
-            MatError::Herdr {
-                command: "herdr workspace list".into(),
-                stderr: "server error".into(),
-            },
+            &["worktree", "remove", "--workspace", "w1"],
+            ok_output(""),
         );
         let herdr = client_with(mock);
-        let err = herdr.list_workspaces().unwrap_err();
-        match err {
-            MatError::Herdr { .. } => {}
-            _ => panic!("expected MatError::Herdr"),
-        }
+        herdr.remove_worktree("w1", false).unwrap();
     }
 
     #[test]
-    fn test_close_workspace_returns_error_on_failure() {
+    fn test_remove_worktree_with_force() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["worktree", "remove", "--workspace", "w2", "--force"],
+            ok_output(""),
+        );
+        let herdr = client_with(mock);
+        herdr.remove_worktree("w2", true).unwrap();
+    }
+
+    #[test]
+    fn test_remove_worktree_returns_error_on_failure() {
         let mut mock = mock_herdr();
         mock.add_error(
             "herdr",
-            &["workspace", "close", "ws-99"],
+            &["worktree", "remove", "--workspace", "w99"],
             MatError::Herdr {
-                command: "herdr workspace close ws-99".into(),
+                command: "herdr worktree remove".into(),
                 stderr: "workspace not found".into(),
             },
         );
         let herdr = client_with(mock);
-        let err = herdr.close_workspace("ws-99").unwrap_err();
+        let err = herdr.remove_worktree("w99", false).unwrap_err();
         match err {
             MatError::Herdr { ref stderr, .. } => {
                 assert!(stderr.contains("workspace not found"));
             }
             _ => panic!("expected MatError::Herdr"),
+        }
+    }
+
+    #[test]
+    fn test_current_workspace_parses_pane_list() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(r#"{"result":{"panes":[{"pane_id":"1-1","workspace_id":"2","tab_id":"1:1","label":"zsh","focused":true}]}}"#),
+        );
+        let herdr = client_with(mock);
+        let ws_id = herdr.current_workspace().unwrap();
+        assert_eq!(ws_id, "2");
+    }
+
+    #[test]
+    fn test_current_workspace_falls_back_to_first_pane() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(r#"{"result":{"panes":[{"pane_id":"2-1","workspace_id":"5","tab_id":"2:1","label":"bash"}]}}"#),
+        );
+        let herdr = client_with(mock);
+        let ws_id = herdr.current_workspace().unwrap();
+        assert_eq!(ws_id, "5");
+    }
+
+    #[test]
+    fn test_current_workspace_returns_error_on_empty_list() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(r#"{"result":{"panes":[]}}"#),
+        );
+        let herdr = client_with(mock);
+        let err = herdr.current_workspace().unwrap_err();
+        match err {
+            MatError::Herdr { ref stderr, .. } => assert!(stderr.contains("no panes found")),
+            _ => panic!("expected MatError::Herdr"),
+        }
+    }
+
+    #[test]
+    fn test_tab_create_returns_tab_and_pane_ids() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["tab", "create", "--workspace", "1"],
+            ok_output(r#"{"result":{"tab":{"tab_id":"1:2"},"root_pane":{"pane_id":"1-3"}}}"#),
+        );
+        let herdr = client_with(mock);
+        let (tab_id, pane_id) = herdr.tab_create("1", None).unwrap();
+        assert_eq!(tab_id, "1:2");
+        assert_eq!(pane_id, "1-3");
+    }
+
+    #[test]
+    fn test_tab_create_with_label() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["tab", "create", "--workspace", "1", "--label", "my-task"],
+            ok_output(r#"{"result":{"tab":{"tab_id":"1:3"},"root_pane":{"pane_id":"1-4"}}}"#),
+        );
+        let herdr = client_with(mock);
+        let (tab_id, pane_id) = herdr.tab_create("1", Some("my-task")).unwrap();
+        assert_eq!(tab_id, "1:3");
+        assert_eq!(pane_id, "1-4");
+    }
+
+    #[test]
+    fn test_pane_split_returns_new_pane_id() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "split", "1-3", "--direction", "right", "--no-focus"],
+            ok_output(r#"{"result":{"pane":{"pane_id":"1-5"}}}"#),
+        );
+        let herdr = client_with(mock);
+        let new_id = herdr.pane_split("1-3", "right", true).unwrap();
+        assert_eq!(new_id, "1-5");
+    }
+
+    #[test]
+    fn test_pane_split_without_no_focus() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "split", "1-3", "--direction", "down"],
+            ok_output(r#"{"result":{"pane":{"pane_id":"1-6"}}}"#),
+        );
+        let herdr = client_with(mock);
+        let new_id = herdr.pane_split("1-3", "down", false).unwrap();
+        assert_eq!(new_id, "1-6");
+    }
+
+    #[test]
+    fn test_tab_focus_sends_tab_id() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["tab", "focus", "1:2"],
+            ok_output(""),
+        );
+        let herdr = client_with(mock);
+        herdr.tab_focus("1:2").unwrap();
+    }
+
+    #[test]
+    fn test_pane_run_sends_command() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "run", "1-3", "cd /repo && opencode ."],
+            ok_output(""),
+        );
+        let herdr = client_with(mock);
+        herdr.pane_run("1-3", "cd /repo && opencode .").unwrap();
+    }
+
+    #[test]
+    fn test_create_worktree_parse_error_on_invalid_json() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                "/repo",
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
+            ok_output("not json"),
+        );
+        let herdr = client_with(mock);
+        let err = herdr
+            .create_worktree("/repo", "feat/login", "main", "app-feat/login", None)
+            .unwrap_err();
+        match err {
+            MatError::Herdr { ref stderr, .. } => {
+                assert!(stderr.contains("failed to parse JSON"));
+            }
+            _ => panic!("expected MatError::Herdr with parse error"),
         }
     }
 }

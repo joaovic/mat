@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -9,11 +10,31 @@ use crate::git::{CommandRunner, GitClient};
 use crate::herdr::HerdrClient;
 use crate::naming;
 
+thread_local! {
+    static TEST_HERDR_INSIDE: Cell<Option<bool>> = Cell::new(None);
+}
+
+fn is_inside_herdr() -> bool {
+    TEST_HERDR_INSIDE.with(|cell| {
+        cell.get().unwrap_or_else(|| std::env::var("HERDR_ENV").map_or(false, |v| v == "1"))
+    })
+}
+
+#[cfg(test)]
+fn set_test_herdr_inside(value: bool) {
+    TEST_HERDR_INSIDE.with(|cell| cell.set(Some(value)));
+}
+
+#[cfg(test)]
+fn clear_test_herdr_inside() {
+    TEST_HERDR_INSIDE.with(|cell| cell.set(None));
+}
+
 fn should_use_herdr(config: &Config) -> bool {
     match config.herdr.enabled {
         HerdrMode::Always => true,
         HerdrMode::Never => false,
-        HerdrMode::Auto => false,
+        HerdrMode::Auto => is_inside_herdr(),
     }
 }
 
@@ -27,6 +48,11 @@ fn store_cwd<R: CommandRunner>(git: &GitClient<R>, branch: &str) {
         let key = format!("branch.{}.mat-cwd", branch);
         let _ = git.config_set(&key, &naming::normalize_path(&cwd));
     }
+}
+
+fn store_herdr_workspace<R: CommandRunner>(git: &GitClient<R>, branch: &str, workspace_id: &str) {
+    let key = format!("branch.{}.mat-herdr-workspace", branch);
+    let _ = git.config_set(&key, workspace_id);
 }
 
 pub fn handle_create<R: CommandRunner>(
@@ -69,8 +95,10 @@ pub fn handle_create<R: CommandRunner>(
 
     if no_worktree {
         handle_no_worktree(git, &names, &source_branch)
+    } else if should_use_herdr(config) && is_inside_herdr() {
+        handle_worktree_herdr_tab(git, herdr, &names, &source_branch, settings, repo_dir)
     } else if should_use_herdr(config) {
-        handle_worktree_herdr(git, herdr, &names, &source_branch, settings, repo_dir)
+        handle_worktree_herdr_workspace(git, herdr, &names, &source_branch, settings, repo_dir)
     } else {
         handle_worktree_shell(git, &names, &source_branch, settings, repo_dir)
     }
@@ -109,17 +137,57 @@ fn handle_no_worktree<R: CommandRunner>(
     Ok(())
 }
 
-fn handle_worktree_herdr<R: CommandRunner>(
+fn handle_worktree_herdr_workspace<R: CommandRunner>(
     git: &GitClient<R>,
     herdr: &HerdrClient<R>,
     names: &naming::Names,
     source_branch: &str,
     _settings: &Settings,
-    _source_dir: &Path,
+    repo_dir: &Path,
 ) -> Result<(), MatError> {
     print_info("Running prerequisite checks...");
     print_success("Git repository detected");
     print_success(&format!("Worktree name: {}", names.worktree_name));
+
+    print_info(&format!(
+        "Creating worktree via herdr: branch {} from {}",
+        names.branch_name, source_branch
+    ));
+
+    let cwd_str = naming::normalize_path(repo_dir);
+    let result = herdr.create_worktree(
+        &cwd_str,
+        &names.branch_name,
+        source_branch,
+        &names.worktree_name,
+        None,
+    )?;
+
+    store_source_branch(git, &names.branch_name, source_branch);
+    store_cwd(git, &names.branch_name);
+    store_herdr_workspace(git, &names.branch_name, &result.workspace_id);
+
+    print_success(&format!("Worktree created at {}", result.path));
+
+    println!();
+    print_success(&format!(
+        "Ready! Herdr workspace '{}' is now open at:",
+        names.worktree_name
+    ));
+    println!("  {}", result.path);
+
+    Ok(())
+}
+
+fn handle_worktree_herdr_tab<R: CommandRunner>(
+    git: &GitClient<R>,
+    herdr: &HerdrClient<R>,
+    names: &naming::Names,
+    source_branch: &str,
+    settings: &Settings,
+    repo_dir: &Path,
+) -> Result<(), MatError> {
+    print_success("Git repository detected");
 
     print_info(&format!(
         "Creating worktree: branch {} from {}",
@@ -132,11 +200,42 @@ fn handle_worktree_herdr<R: CommandRunner>(
     store_cwd(git, &names.branch_name);
     print_success(&format!("Worktree created at {}", path_str));
 
-    let _ = herdr.create_workspace(&path_str, &names.worktree_name);
+    if !settings.worktree.copy_patterns.is_empty() {
+        let _ = crate::config::copy_worktree_files(repo_dir, &names.worktree_path, settings);
+    }
+
+    if !settings.worktree.post_create_cmd.is_empty() {
+        let _ = crate::config::run_post_create_commands(
+            &names.worktree_path,
+            &settings.worktree.post_create_cmd,
+        );
+    }
+
+    print_info("Setting up herdr tab...");
+    let workspace_id = herdr.current_workspace()?;
+
+    let (tab_id, root_pane_id) =
+        herdr.tab_create(&workspace_id, Some(&names.worktree_name))?;
+
+    let right_pane_id =
+        herdr.pane_split(&root_pane_id, "right", true)?;
+
+    herdr.pane_run(
+        &right_pane_id,
+        &format!("cd {} && opencode .", path_str),
+    )?;
+
+    let bottom_pane_id = herdr.pane_split(&root_pane_id, "down", true)?;
+
+    herdr.pane_run(&root_pane_id, &format!("cd {} && ll", path_str))?;
+
+    herdr.pane_run(&bottom_pane_id, &format!("cd {}", path_str))?;
+
+    herdr.tab_focus(&tab_id)?;
 
     println!();
     print_success(&format!(
-        "Ready! Herdr workspace '{}' is now open at:",
+        "Ready! Herdr tab '{}' with panel layout set up at:",
         names.worktree_name
     ));
     println!("  {}", path_str);
@@ -423,9 +522,15 @@ mod tests {
         env::set_var("SHELL", "true");
         env::set_var("MAT_SKIP_TERMINAL", "1");
 
+        let settings = crate::config::Settings {
+            worktree: crate::config::WorktreeSettings {
+                post_create_cmd: vec![],
+                ..crate::config::WorktreeSettings::default()
+            },
+        };
         let app_name = APP_NAME;
         let result = handle_create(
-            "fix", "typo", None, false, &config, &git, &herdr, app_name, &repo_dir,
+            "fix", "typo", None, false, &config, &settings, &git, &herdr, app_name, &repo_dir,
         );
 
         match prev_shell {
@@ -443,6 +548,19 @@ mod tests {
 
     fn base_settings() -> Settings {
         Settings::default()
+    }
+
+    fn clear_test_herdr_env() -> Option<String> {
+        let prev = std::env::var("HERDR_ENV").ok();
+        std::env::remove_var("HERDR_ENV");
+        prev
+    }
+
+    fn restore_test_herdr_env(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("HERDR_ENV", v),
+            None => std::env::remove_var("HERDR_ENV"),
+        }
     }
 
     fn ok_output(stdout: &str) -> CommandOutput {
@@ -463,31 +581,69 @@ mod tests {
         }
     }
 
-    // ── Worktree + Herdr path ──────────────────────────────────
+    fn herdr_create_json(ws_id: &str, branch: &str, path: &str) -> String {
+        format!(
+            r#"{{"result":{{"workspace":{{"workspace_id":"{}"}},"worktree":{{"branch":"{}","path":"{}"}}}}}}"#,
+            ws_id, branch, path
+        )
+    }
+
+    // ── is_inside_herdr ───────────────────────────────────────────
+
+    #[test]
+    fn test_is_inside_herdr_returns_false_when_var_unset() {
+        clear_test_herdr_inside();
+        let prev_env = clear_test_herdr_env();
+        assert!(!is_inside_herdr());
+        restore_test_herdr_env(prev_env);
+    }
+
+    #[test]
+    fn test_is_inside_herdr_returns_true_when_var_is_1() {
+        clear_test_herdr_inside();
+        let prev_env = clear_test_herdr_env();
+        std::env::set_var("HERDR_ENV", "1");
+        assert!(is_inside_herdr());
+        restore_test_herdr_env(prev_env);
+    }
+
+    #[test]
+    fn test_is_inside_herdr_returns_false_when_var_is_0() {
+        clear_test_herdr_inside();
+        let prev_env = clear_test_herdr_env();
+        std::env::set_var("HERDR_ENV", "0");
+        assert!(!is_inside_herdr());
+        restore_test_herdr_env(prev_env);
+    }
+
+    // ── Worktree + Herdr workspace path ───────────────────────────
 
     #[test]
     fn test_worktree_herdr_path_full_flow() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
                 "--label",
                 "app-feat/login",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w1", "feat/login", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
@@ -498,6 +654,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -508,26 +665,29 @@ mod tests {
 
     #[test]
     fn test_worktree_herdr_uses_source_flag() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "develop",
                 "--label",
                 "app-feat/login",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w2", "feat/login", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
@@ -538,6 +698,7 @@ mod tests {
             Some("develop"),
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -547,21 +708,35 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_herdr_worktree_add_failure() {
+    fn test_worktree_herdr_create_failure() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
-        let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_error(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
-            MatError::Git {
-                command: "git worktree add".into(),
-                stderr: "fatal: already exists".into(),
+            "herdr",
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
+            MatError::Herdr {
+                command: "herdr worktree create".into(),
+                stderr: "server not running".into(),
             },
         );
 
-        let git = GitClient::new(mock);
-        let herdr = HerdrClient::new(MockRunner::new());
+        let settings = base_settings();
+        let git = GitClient::new(mock.clone());
+        let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
 
         let result = handle_create(
@@ -570,6 +745,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -577,13 +753,14 @@ mod tests {
         );
         assert!(result.is_err());
         match result.unwrap_err() {
-            MatError::Git { ref stderr, .. } => assert!(stderr.contains("already exists")),
-            _ => panic!("expected MatError::Git"),
+            MatError::Herdr { ref stderr, .. } => assert!(stderr.contains("server not running")),
+            _ => panic!("expected MatError::Herdr"),
         }
     }
 
     #[test]
     fn test_worktree_herdr_uses_default_branch_from_config_when_auto_detect_fails() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
@@ -596,23 +773,25 @@ mod tests {
             },
         );
         mock.add_response(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "develop",
                 "--label",
                 "app-feat/login",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w3", "feat/login", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = Config {
@@ -629,6 +808,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -661,6 +841,7 @@ mod tests {
         let git = GitClient::new(mock);
         let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
+        let settings = base_settings();
 
         let result = handle_create(
             "feat",
@@ -668,6 +849,7 @@ mod tests {
             Some("main"),
             true,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -689,6 +871,7 @@ mod tests {
         let git = GitClient::new(mock);
         let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
+        let settings = base_settings();
 
         let result = handle_create(
             "feat",
@@ -696,6 +879,7 @@ mod tests {
             Some("main"),
             true,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -717,6 +901,7 @@ mod tests {
         let git = GitClient::new(mock);
         let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
+        let settings = base_settings();
 
         let result = handle_create(
             "feat",
@@ -724,6 +909,7 @@ mod tests {
             Some("main"),
             true,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -745,6 +931,7 @@ mod tests {
         let git = GitClient::new(mock);
         let herdr = HerdrClient::new(MockRunner::new());
         let config = base_config();
+        let settings = base_settings();
 
         let result = handle_create(
             "feat",
@@ -752,6 +939,7 @@ mod tests {
             Some("main"),
             true,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -778,27 +966,30 @@ mod tests {
 
     #[test]
     fn test_herdr_enabled_always_forces_herdr_even_without_env() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
         mock.add_response(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
                 "--label",
                 "app-feat/login",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w1", "feat/login", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
@@ -809,6 +1000,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -819,6 +1011,56 @@ mod tests {
 
     #[test]
     fn test_herdr_enabled_always_fails_when_herdr_not_running() {
+        set_test_herdr_inside(false);
+        let mut mock = MockRunner::new();
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
+        mock.add_error(
+            "herdr",
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
+            MatError::Herdr {
+                command: "herdr worktree create".into(),
+                stderr: "server not running".into(),
+            },
+        );
+
+        let settings = base_settings();
+        let git = GitClient::new(mock);
+        let herdr = HerdrClient::new(MockRunner::new());
+        let config = config_herdr(HerdrMode::Always);
+
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &settings,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Worktree + Herdr tab path (inside herdr) ───────────────
+
+    #[test]
+    fn test_worktree_herdr_tab_full_flow() {
+        set_test_herdr_inside(true);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
@@ -827,22 +1069,48 @@ mod tests {
             &["worktree", "add", "-b", "feat/login", &tree_path, "main"],
             ok_output(""),
         );
-        mock.add_error(
+        mock.add_response(
             "herdr",
-            &[
-                "workspace",
-                "create",
-                "--cwd",
-                &tree_path,
-                "--label",
-                "app-feat/login",
-            ],
-            MatError::Herdr {
-                command: "herdr workspace create".into(),
-                stderr: "no server running".into(),
-            },
+            &["pane", "list"],
+            ok_output(r#"{"result":{"panes":[{"pane_id":"1-1","workspace_id":"1","focused":true}]}}"#),
+        );
+        mock.add_response(
+            "herdr",
+            &["tab", "create", "--workspace", "1", "--label", "app-feat/login"],
+            ok_output(r#"{"result":{"tab":{"tab_id":"1:2"},"root_pane":{"pane_id":"1-3"}}}"#),
+        );
+        mock.add_response(
+            "herdr",
+            &["pane", "split", "1-3", "--direction", "right", "--no-focus"],
+            ok_output(r#"{"result":{"pane":{"pane_id":"1-4"}}}"#),
+        );
+        mock.add_response(
+            "herdr",
+            &["pane", "run", "1-4", &format!("cd {} && opencode .", tree_path)],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &["pane", "split", "1-3", "--direction", "down", "--no-focus"],
+            ok_output(r#"{"result":{"pane":{"pane_id":"1-5"}}}"#),
+        );
+        mock.add_response(
+            "herdr",
+            &["pane", "run", "1-3", &format!("cd {} && ll", tree_path)],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &["pane", "run", "1-5", &format!("cd {}", tree_path)],
+            ok_output(""),
+        );
+        mock.add_response(
+            "herdr",
+            &["tab", "focus", "1:2"],
+            ok_output(""),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
@@ -853,11 +1121,61 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
             repo(),
         );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_worktree_herdr_tab_inside_herdr_only() {
+        // When not inside herdr, should NOT call pane/tab methods
+        set_test_herdr_inside(false);
+        let mut mock = MockRunner::new();
+        let tree_path = wt("feat", "login");
+        mock.add_response("git", &["branch", "--show-current"], ok_output("main\n"));
+        mock.add_response(
+            "herdr",
+            &[
+                "worktree",
+                "create",
+                "--cwd",
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "main",
+                "--label",
+                "app-feat/login",
+                "--no-focus",
+                "--json",
+            ],
+            ok_output(&herdr_create_json("w1", "feat/login", &tree_path)),
+        );
+
+        let settings = base_settings();
+        let git = GitClient::new(mock.clone());
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr(HerdrMode::Always);
+
+        let result = handle_create(
+            "feat",
+            "login",
+            None,
+            false,
+            &config,
+            &settings,
+            &git,
+            &herdr,
+            APP_NAME,
+            repo(),
+        );
+        // Without HERDR_ENV, falls through to handle_worktree_herdr_workspace
+        // which needs herdr worktree create mock (set up above)
         assert!(result.is_ok());
     }
 
@@ -865,6 +1183,7 @@ mod tests {
 
     #[test]
     fn test_default_branch_from_config_when_source_not_given() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("chore", "update");
         mock.add_response("git", &["branch", "--show-current"], ok_output("\n"));
@@ -877,30 +1196,25 @@ mod tests {
             },
         );
         mock.add_response(
-            "git",
-            &[
-                "worktree",
-                "add",
-                "-b",
-                "chore/update",
-                &tree_path,
-                "develop",
-            ],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "chore/update",
+                "--base",
+                "develop",
                 "--label",
                 "app-chore/update",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w4", "chore/update", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = Config {
@@ -917,6 +1231,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,
@@ -940,34 +1255,45 @@ mod tests {
     }
 
     #[test]
-    fn test_should_use_herdr_auto() {
+    fn test_should_use_herdr_auto_without_env() {
+        set_test_herdr_inside(false);
         let config = config_herdr(HerdrMode::Auto);
         assert!(!should_use_herdr(&config));
     }
 
     #[test]
+    fn test_should_use_herdr_auto_with_env() {
+        set_test_herdr_inside(true);
+        let config = config_herdr(HerdrMode::Auto);
+        assert!(should_use_herdr(&config));
+    }
+
+    #[test]
     fn test_uses_current_branch_as_source_when_not_provided() {
+        set_test_herdr_inside(false);
         let mut mock = MockRunner::new();
         let tree_path = wt("feat", "login");
         mock.add_response("git", &["branch", "--show-current"], ok_output("develop\n"));
         mock.add_response(
-            "git",
-            &["worktree", "add", "-b", "feat/login", &tree_path, "develop"],
-            ok_output(""),
-        );
-        mock.add_response(
             "herdr",
             &[
-                "workspace",
+                "worktree",
                 "create",
                 "--cwd",
-                &tree_path,
+                REPO_DIR,
+                "--branch",
+                "feat/login",
+                "--base",
+                "develop",
                 "--label",
                 "app-feat/login",
+                "--no-focus",
+                "--json",
             ],
-            ok_output("ws-1\n"),
+            ok_output(&herdr_create_json("w5", "feat/login", &tree_path)),
         );
 
+        let settings = base_settings();
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr(HerdrMode::Always);
@@ -978,6 +1304,7 @@ mod tests {
             None,
             false,
             &config,
+            &settings,
             &git,
             &herdr,
             APP_NAME,

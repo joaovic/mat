@@ -25,7 +25,7 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[command(name = "mat", version = "0.5.0")]
+#[command(name = "mat", version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Multi-Agent Task - Create Git worktree for new features with herdr workspace support", long_about = None)]
 struct Cli {
     #[arg(

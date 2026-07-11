@@ -187,19 +187,25 @@ pub fn handle_close<R: CommandRunner>(
         )?
     };
 
-    // Step 4: Close herdr workspace (before worktree remove — releases Windows worktree lock)
+    // Step 4: Close herdr workspace and remove worktree
     let use_herdr = should_use_herdr(config);
+    let mut worktree_removed_by_herdr = false;
 
-    if use_herdr {
-        let path_str = naming::normalize_path(&current_dir);
-        if let Ok(Some(ws_id)) = herdr.find_workspace_by_path(&path_str) {
-            herdr.close_workspace(&ws_id)?;
-            print_success("Herdr workspace closed");
+    if use_herdr && maybe_worktree_path.is_some() {
+        let ws_key = format!("branch.{}.mat-herdr-workspace", branch_name);
+        if let Ok(ws_id) = git.config_get(&ws_key) {
+            if !ws_id.is_empty() {
+                herdr.remove_worktree(&ws_id, false)?;
+                print_success("Herdr workspace closed");
+                worktree_removed_by_herdr = true;
+            }
         }
     }
 
-    // Step 5: Change to original directory to release worktree lock, then delete worktree
-    if let Some(ref path) = maybe_worktree_path {
+    // Step 5: Delete worktree (skip if herdr already removed it)
+    if worktree_removed_by_herdr {
+        print_success("Worktree deleted");
+    } else if let Some(ref path) = maybe_worktree_path {
         // Restore original cwd (where `mat create` was issued) to avoid Windows worktree lock
         let cwd_key = format!("branch.{}.mat-cwd", branch_name);
         if let Ok(original_cwd) = git.config_get(&cwd_key) {
@@ -341,14 +347,33 @@ branch refs/heads/feat/login
         }
     }
 
-    fn cleanup_mocks(mock: &mut MockRunner, path: &str, branch: &str) {
+    fn cleanup_mocks(mock: &mut MockRunner, _path: &str, branch: &str) {
         mock.add_response(
             "git",
             &["config", "--get", &format!("branch.{}.mat-cwd", branch)],
             ok_output("/original/cwd\n"),
         );
-        mock.add_response("git", &["worktree", "remove", path], ok_output(""));
         mock.add_response("git", &["branch", "-d", branch], ok_output(""));
+    }
+
+    fn worktree_remove_mock(mock: &mut MockRunner, path: &str) {
+        mock.add_response("git", &["worktree", "remove", path], ok_output(""));
+    }
+
+    fn herdr_worktree_remove_mock(mock: &mut MockRunner, ws_id: &str) {
+        mock.add_response(
+            "herdr",
+            &["worktree", "remove", "--workspace", ws_id],
+            ok_output(""),
+        );
+    }
+
+    fn herdr_ws_config_mock(mock: &mut MockRunner, branch: &str, ws_id: &str) {
+        mock.add_response(
+            "git",
+            &["config", "--get", &format!("branch.{}.mat-herdr-workspace", branch)],
+            ok_output(&format!("{}\n", ws_id)),
+        );
     }
 
     fn default_branch_mocks(mock: &mut MockRunner) {
@@ -364,19 +389,6 @@ branch refs/heads/feat/login
             "git",
             &["symbolic-ref", "refs/remotes/origin/HEAD"],
             ok_output("refs/remotes/origin/main\n"),
-        );
-    }
-
-    fn herdr_close_mocks(mock: &mut MockRunner, path: &str, ws_id: &str) {
-        mock.add_response(
-            "herdr",
-            &["workspace", "list"],
-            ok_output(&format!("{}\t{}\tlabel", ws_id, path)),
-        );
-        mock.add_response(
-            "herdr",
-            &["workspace", "close", ws_id],
-            ok_output(""),
         );
     }
 
@@ -436,7 +448,8 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -457,8 +470,8 @@ branch refs/heads/feat/login
             &["config", "--get", "branch.feat/login.mat-cwd"],
             ok_output("/original/cwd\n"),
         );
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -478,9 +491,9 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         // No branch -d mock = test will fail if branch_delete is called
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -503,7 +516,8 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -520,7 +534,8 @@ branch refs/heads/feat/login
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::FastForward);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -580,9 +595,9 @@ branch refs/heads/feat/login
             &["config", "--get", "branch.feat/login.mat-cwd"],
             ok_output("/original/cwd\n"),
         );
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -598,13 +613,8 @@ branch refs/heads/feat/login
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         mock.add_response("git", &["checkout", "main"], ok_output(""));
-        mock.add_response(
-            "git",
-            &["config", "--get", "branch.feat/login.mat-cwd"],
-            ok_output("/original/cwd\n"),
-        );
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         // Use no_delete + herdr always to avoid needing branch_delete mock
         let config = Config {
@@ -630,9 +640,9 @@ branch refs/heads/feat/login
             &["config", "--get", "branch.feat/login.mat-cwd"],
             ok_output("/original/cwd\n"),
         );
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -672,12 +682,10 @@ branch refs/heads/main
         mock.add_response("git", &["stash", "pop", "mat:auto:feat/login"], ok_output(""));
         // default_branch
         default_branch_mocks(&mut mock);
-        // merge
+        //         merge
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         // branch_delete
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        // herdr close
-        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -758,7 +766,6 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -793,7 +800,6 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        herdr_close_mocks(&mut mock, "/repo", "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -812,7 +818,8 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -831,6 +838,7 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
+        worktree_remove_mock(&mut mock, "/repo.worktree/app-feat/login");
         // No herdr mocks needed — herdr should not be touched
 
         let git = GitClient::new(mock);
@@ -848,7 +856,8 @@ branch refs/heads/main
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -873,7 +882,8 @@ branch refs/heads/main
         // default_branch should NOT be called since config has the value
         successful_merge_from_mocks(&mut mock, "feat/login", "develop", &MergeStrategy::MergeCommit);
         cleanup_mocks(&mut mock, "/repo.worktree/app-feat/login", "feat/login");
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
@@ -892,20 +902,14 @@ branch refs/heads/main
     }
 
     #[test]
-    fn test_handle_close_no_herdr_error_does_not_crash() {
+    fn test_herdr_remove_worktree_called_when_ws_config_found() {
         let mut mock = mock_git();
         setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
         default_branch_mocks(&mut mock);
         successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
-        mock.add_response(
-            "git",
-            &["config", "--get", "branch.feat/login.mat-cwd"],
-            ok_output("/original/cwd\n"),
-        );
-        mock.add_response("git", &["worktree", "remove", "/repo.worktree/app-feat/login"], ok_output(""));
+        herdr_ws_config_mock(&mut mock, "feat/login", "ws-1");
+        herdr_worktree_remove_mock(&mut mock, "ws-1");
         mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
-        // herdr errors should propagate
-        herdr_close_mocks(&mut mock, "/repo.worktree/app-feat/login", "ws-1");
 
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
