@@ -250,9 +250,10 @@ pub fn handle_close<R: CommandRunner>(
 
     // Step 8: Close herdr tab if one was created for this branch
     if let Some(ref tab_id) = herdr_tab_id {
+        let exit_cmd = &config.herdr.agent_exit_cmd;
         match herdr.tab_close(tab_id) {
             Ok(()) => print_success("Herdr tab closed"),
-            Err(_) => match herdr.close_tab(tab_id) {
+            Err(_) => match herdr.close_tab(tab_id, exit_cmd) {
                 Ok(()) => print_success("Herdr tab closed"),
                 Err(e) => print_warning(&format!("Could not close herdr tab: {}", e)),
             },
@@ -413,7 +414,7 @@ fn herdr_tab_close_mock(mock: &mut MockRunner, tab_id: &str, pane_ids: &[&str]) 
     for pane_id in pane_ids {
         mock.add_response(
             "herdr",
-            &["pane", "run", pane_id, "/exit"],
+            &["pane", "run", pane_id, crate::config::AGENT_EXIT_CMD],
             ok_output(""),
         );
     }
@@ -462,6 +463,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         Config {
             herdr: crate::config::HerdrConfig {
                 enabled: HerdrMode::Never,
+                agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into(),
             },
             ..Config::default()
         }
@@ -471,6 +473,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         Config {
             herdr: crate::config::HerdrConfig {
                 enabled: HerdrMode::Always,
+                agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into(),
             },
             ..Config::default()
         }
@@ -535,7 +538,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         let herdr = HerdrClient::new(mock);
         let config = Config {
             delete_branch: false,
-            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            herdr: HerdrConfig { enabled: HerdrMode::Always, agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into() },
             ..Config::default()
         };
 
@@ -557,7 +560,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         let herdr = HerdrClient::new(mock);
         let config = Config {
             delete_branch: false,
-            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            herdr: HerdrConfig { enabled: HerdrMode::Always, agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into() },
             ..Config::default()
         };
 
@@ -599,7 +602,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         let herdr = HerdrClient::new(mock);
         let config = Config {
             merge_strategy: MergeStrategy::FastForward,
-            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            herdr: HerdrConfig { enabled: HerdrMode::Always, agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into() },
             ..Config::default()
         };
 
@@ -677,7 +680,7 @@ fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
         // Use no_delete + herdr always to avoid needing branch_delete mock
         let config = Config {
             delete_branch: false,
-            herdr: HerdrConfig { enabled: HerdrMode::Always },
+            herdr: HerdrConfig { enabled: HerdrMode::Always, agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into() },
             ..Config::default()
         };
         let git = GitClient::new(mock.clone());
@@ -1012,7 +1015,7 @@ branch refs/heads/main
             ok_output(&pane_list_with_tab("1:2", &["1-1", "1-2", "1-3"])),
         );
         for pid in &["1-1", "1-2", "1-3"] {
-            mock.add_response("herdr", &["pane", "run", pid, "/exit"], ok_output(""));
+            mock.add_response("herdr", &["pane", "run", pid, crate::config::AGENT_EXIT_CMD], ok_output(""));
         }
         mock.add_response("herdr", &["pane", "close", "1-1"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));

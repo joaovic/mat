@@ -584,7 +584,7 @@ mod tests {
 
     fn config_herdr(enabled: HerdrMode) -> Config {
         Config {
-            herdr: HerdrConfig { enabled },
+            herdr: HerdrConfig { enabled, agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into() },
             ..Config::default()
         }
     }
@@ -806,6 +806,7 @@ mod tests {
             default_branch: "develop".into(),
             herdr: HerdrConfig {
                 enabled: HerdrMode::Always,
+                agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into(),
             },
             ..Config::default()
         };
@@ -1234,6 +1235,7 @@ mod tests {
             default_branch: "develop".into(),
             herdr: HerdrConfig {
                 enabled: HerdrMode::Always,
+                agent_exit_cmd: crate::config::AGENT_EXIT_CMD.into(),
             },
             ..Config::default()
         };

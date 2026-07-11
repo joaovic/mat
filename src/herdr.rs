@@ -242,13 +242,14 @@ impl<R: CommandRunner> HerdrClient<R> {
         Ok(())
     }
 
-    pub fn close_tab(&self, tab_id: &str) -> Result<(), MatError> {
+    pub fn close_tab(&self, tab_id: &str, exit_cmd: &str) -> Result<(), MatError> {
         let output = self.run_herdr(&["pane", "list"])?;
 
         #[derive(Debug, Deserialize)]
         struct PaneItem {
             pane_id: String,
             tab_id: String,
+            agent: Option<String>,
         }
 
         #[derive(Debug, Deserialize)]
@@ -268,12 +269,12 @@ impl<R: CommandRunner> HerdrClient<R> {
                 stderr: format!("failed to parse JSON: {}", e),
             })?;
 
-        let tab_panes: Vec<&str> = parsed
+        let tab_panes: Vec<(String, Option<String>)> = parsed
             .result
             .panes
             .iter()
             .filter(|p| p.tab_id == tab_id)
-            .map(|p| p.pane_id.as_str())
+            .map(|p| (p.pane_id.clone(), p.agent.clone()))
             .collect();
 
         if tab_panes.is_empty() {
@@ -283,11 +284,12 @@ impl<R: CommandRunner> HerdrClient<R> {
             });
         }
 
-        for pane_id in &tab_panes {
-            let _ = self.pane_run(pane_id, "/exit");
+        for (pane_id, agent) in &tab_panes {
+            let cmd = exit_cmd_for_agent(agent.as_deref(), exit_cmd);
+            let _ = self.pane_run(pane_id, cmd);
         }
 
-        for pane_id in tab_panes {
+        for (pane_id, _) in &tab_panes {
             self.pane_close(pane_id)?;
         }
 
@@ -298,6 +300,10 @@ impl<R: CommandRunner> HerdrClient<R> {
         self.run_herdr(&["pane", "run", pane_id, command])?;
         Ok(())
     }
+}
+
+fn exit_cmd_for_agent<'a>(_agent: Option<&str>, configured: &'a str) -> &'a str {
+    configured
 }
 
 #[cfg(test)]
@@ -592,15 +598,56 @@ mod tests {
                 ]}}"#,
             ),
         );
-        mock.add_response("herdr", &["pane", "run", "1-2", "/exit"], ok_output(""));
-        mock.add_response("herdr", &["pane", "run", "1-3", "/exit"], ok_output(""));
-        mock.add_response("herdr", &["pane", "run", "1-4", "/exit"], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-2", crate::config::AGENT_EXIT_CMD], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-3", crate::config::AGENT_EXIT_CMD], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-4", crate::config::AGENT_EXIT_CMD], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-4"], ok_output(""));
 
         let herdr = client_with(mock);
-        herdr.close_tab("1:2").unwrap();
+        herdr.close_tab("1:2", crate::config::AGENT_EXIT_CMD).unwrap();
+    }
+
+    #[test]
+    fn test_close_tab_uses_configured_exit_cmd_for_unknown_agent() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(
+                r#"{"result":{"panes":[
+                    {"pane_id":"1-2","tab_id":"1:2","workspace_id":"1"},
+                    {"pane_id":"1-3","tab_id":"1:2","workspace_id":"1","agent":"unknown-agent"}
+                ]}}"#,
+            ),
+        );
+        mock.add_response("herdr", &["pane", "run", "1-2", "/custom"], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-3", "/custom"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));
+
+        let herdr = client_with(mock);
+        herdr.close_tab("1:2", "/custom").unwrap();
+    }
+
+    #[test]
+    fn test_close_tab_uses_exit_for_opencode_agent() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(
+                r#"{"result":{"panes":[
+                    {"pane_id":"1-2","tab_id":"1:2","workspace_id":"1","agent":"opencode"}
+                ]}}"#,
+            ),
+        );
+        mock.add_response("herdr", &["pane", "run", "1-2", crate::config::AGENT_EXIT_CMD], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
+
+        let herdr = client_with(mock);
+        herdr.close_tab("1:2", "/custom").unwrap();
     }
 
     #[test]
@@ -613,7 +660,7 @@ mod tests {
         );
 
         let herdr = client_with(mock);
-        let err = herdr.close_tab("1:99").unwrap_err();
+        let err = herdr.close_tab("1:99", crate::config::AGENT_EXIT_CMD).unwrap_err();
         match err {
             MatError::Herdr { ref stderr, .. } => assert!(stderr.contains("no panes found")),
             _ => panic!("expected MatError::Herdr"),

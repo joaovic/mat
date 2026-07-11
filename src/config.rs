@@ -90,12 +90,21 @@ impl<'de> Deserialize<'de> for HerdrMode {
 pub struct HerdrConfig {
     #[serde(default)]
     pub enabled: HerdrMode,
+    #[serde(default = "default_agent_exit_cmd")]
+    pub agent_exit_cmd: String,
+}
+
+pub const AGENT_EXIT_CMD: &str = "/exit";
+
+fn default_agent_exit_cmd() -> String {
+    AGENT_EXIT_CMD.to_string()
 }
 
 impl Default for HerdrConfig {
     fn default() -> Self {
         HerdrConfig {
             enabled: HerdrMode::Auto,
+            agent_exit_cmd: default_agent_exit_cmd(),
         }
     }
 }
@@ -158,6 +167,7 @@ impl Default for Config {
         sources.insert("merge_strategy".into(), Source::Default);
         sources.insert("worktree_root".into(), Source::Default);
         sources.insert("herdr.enabled".into(), Source::Default);
+        sources.insert("herdr.agent_exit_cmd".into(), Source::Default);
 
         Config {
             default_branch: "main".into(),
@@ -187,6 +197,7 @@ impl Config {
             "merge_strategy",
             "worktree_root",
             "herdr.enabled",
+            "herdr.agent_exit_cmd",
         ];
 
         keys.iter()
@@ -207,6 +218,7 @@ impl Config {
             "merge_strategy",
             "worktree_root",
             "herdr.enabled",
+            "herdr.agent_exit_cmd",
         ];
 
         if !valid_keys.contains(&key) {
@@ -232,6 +244,7 @@ impl Config {
                 .clone()
                 .unwrap_or_else(|| "<not set>".to_string()),
             "herdr.enabled" => self.herdr.enabled.to_string(),
+            "herdr.agent_exit_cmd" => self.herdr.agent_exit_cmd.clone(),
             _ => "<unknown>".to_string(),
         }
     }
@@ -439,13 +452,21 @@ fn merge_configs(
         HerdrMode::Auto,
         &mut sources,
     );
+    let herdr_exit_cmd = resolve_herdr_exit_cmd_field(
+        &project.herdr,
+        &global.herdr,
+        &mut sources,
+    );
 
     Config {
         default_branch,
         delete_branch,
         merge_strategy,
         worktree_root,
-        herdr: HerdrConfig { enabled: herdr_enabled },
+        herdr: HerdrConfig {
+            enabled: herdr_enabled,
+            agent_exit_cmd: herdr_exit_cmd,
+        },
         global_path,
         project_path,
         sources,
@@ -523,6 +544,26 @@ fn resolve_option_field(
     } else {
         sources.insert("worktree_root".into(), Source::Default);
         None
+    }
+}
+
+fn resolve_herdr_exit_cmd_field(
+    project: &Option<HerdrConfig>,
+    global: &Option<HerdrConfig>,
+    sources: &mut HashMap<String, Source>,
+) -> String {
+    let project_val = project.as_ref().map(|t| &t.agent_exit_cmd);
+    let global_val = global.as_ref().map(|t| &t.agent_exit_cmd);
+
+    if let Some(val) = project_val {
+        sources.insert("herdr.agent_exit_cmd".into(), Source::Project);
+        val.clone()
+    } else if let Some(val) = global_val {
+        sources.insert("herdr.agent_exit_cmd".into(), Source::Global);
+        val.clone()
+    } else {
+        sources.insert("herdr.agent_exit_cmd".into(), Source::Default);
+        default_agent_exit_cmd()
     }
 }
 
@@ -998,6 +1039,7 @@ mod tests {
             worktree_root: Some("/global/path".into()),
             herdr: Some(HerdrConfig {
                 enabled: HerdrMode::Always,
+                agent_exit_cmd: AGENT_EXIT_CMD.into(),
             }),
         };
 
@@ -1081,6 +1123,7 @@ mod tests {
             worktree_root: Some("/wt".into()),
             herdr: Some(HerdrConfig {
                 enabled: HerdrMode::Never,
+                agent_exit_cmd: AGENT_EXIT_CMD.into(),
             }),
         };
 
@@ -1190,7 +1233,7 @@ mod tests {
     fn test_effective_values_returns_all_keys() {
         let config = Config::default();
         let values = config.effective_values();
-        assert_eq!(values.len(), 5);
+        assert_eq!(values.len(), 6);
 
         let keys: Vec<String> = values.iter().map(|e| e.key.clone()).collect();
         assert!(keys.contains(&"default_branch".to_string()));
@@ -1198,6 +1241,7 @@ mod tests {
         assert!(keys.contains(&"merge_strategy".to_string()));
         assert!(keys.contains(&"worktree_root".to_string()));
         assert!(keys.contains(&"herdr.enabled".to_string()));
+        assert!(keys.contains(&"herdr.agent_exit_cmd".to_string()));
     }
 
     #[test]
@@ -1326,7 +1370,7 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            herdr: Some(HerdrConfig { enabled: HerdrMode::Always }),
+            herdr: Some(HerdrConfig { enabled: HerdrMode::Always, agent_exit_cmd: AGENT_EXIT_CMD.into() }),
         };
 
         let project = RawConfig {
@@ -1334,7 +1378,7 @@ worktree_root = "/tmp/worktrees/{app}/{type}"
             delete_branch: None,
             merge_strategy: None,
             worktree_root: None,
-            herdr: Some(HerdrConfig { enabled: HerdrMode::Never }),
+            herdr: Some(HerdrConfig { enabled: HerdrMode::Never, agent_exit_cmd: AGENT_EXIT_CMD.into() }),
         };
 
         let config = merge_configs(Some(global), None, Some(project), None);
