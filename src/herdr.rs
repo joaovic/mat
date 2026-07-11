@@ -232,6 +232,64 @@ impl<R: CommandRunner> HerdrClient<R> {
         Ok(())
     }
 
+    pub fn tab_close(&self, tab_id: &str) -> Result<(), MatError> {
+        self.run_herdr(&["tab", "close", tab_id])?;
+        Ok(())
+    }
+
+    pub fn pane_close(&self, pane_id: &str) -> Result<(), MatError> {
+        self.run_herdr(&["pane", "close", pane_id])?;
+        Ok(())
+    }
+
+    pub fn close_tab(&self, tab_id: &str) -> Result<(), MatError> {
+        let output = self.run_herdr(&["pane", "list"])?;
+
+        #[derive(Debug, Deserialize)]
+        struct PaneItem {
+            pane_id: String,
+            tab_id: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct PaneListResult {
+            panes: Vec<PaneItem>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct PaneListOutput {
+            result: PaneListResult,
+        }
+
+        let parsed: PaneListOutput =
+            serde_json::from_str(&output.stdout).map_err(|e| MatError::Herdr {
+                command: "close_tab panes".into(),
+                stderr: format!("failed to parse JSON: {}", e),
+            })?;
+
+        let tab_panes: Vec<&str> = parsed
+            .result
+            .panes
+            .iter()
+            .filter(|p| p.tab_id == tab_id)
+            .map(|p| p.pane_id.as_str())
+            .collect();
+
+        if tab_panes.is_empty() {
+            return Err(MatError::Herdr {
+                command: "close_tab".into(),
+                stderr: format!("no panes found for tab {}", tab_id),
+            });
+        }
+
+        for pane_id in tab_panes {
+            self.pane_close(pane_id)?;
+        }
+
+        Ok(())
+    }
+
     pub fn pane_run(&self, pane_id: &str, command: &str) -> Result<(), MatError> {
         self.run_herdr(&["pane", "run", pane_id, command])?;
         Ok(())
@@ -500,6 +558,67 @@ mod tests {
         let herdr = client_with(mock);
         let new_id = herdr.pane_split("1-3", "down", false).unwrap();
         assert_eq!(new_id, "1-6");
+    }
+
+    #[test]
+    fn test_pane_close_sends_pane_id() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "close", "1-3"],
+            ok_output(""),
+        );
+        let herdr = client_with(mock);
+        herdr.pane_close("1-3").unwrap();
+    }
+
+    #[test]
+    fn test_close_tab_closes_all_panes_in_tab() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(
+                r#"{"result":{"panes":[
+                    {"pane_id":"1-1","tab_id":"1:1","workspace_id":"1"},
+                    {"pane_id":"1-2","tab_id":"1:2","workspace_id":"1"},
+                    {"pane_id":"1-3","tab_id":"1:2","workspace_id":"1"},
+                    {"pane_id":"1-4","tab_id":"1:2","workspace_id":"1"},
+                    {"pane_id":"2-1","tab_id":"2:1","workspace_id":"2"}
+                ]}}"#,
+            ),
+        );
+        mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-4"], ok_output(""));
+
+        let herdr = client_with(mock);
+        herdr.close_tab("1:2").unwrap();
+    }
+
+    #[test]
+    fn test_close_tab_returns_error_when_no_panes_found() {
+        let mut mock = mock_herdr();
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(r#"{"result":{"panes":[]}}"#),
+        );
+
+        let herdr = client_with(mock);
+        let err = herdr.close_tab("1:99").unwrap_err();
+        match err {
+            MatError::Herdr { ref stderr, .. } => assert!(stderr.contains("no panes found")),
+            _ => panic!("expected MatError::Herdr"),
+        }
+    }
+
+    #[test]
+    fn test_tab_close_sends_tab_id() {
+        let mut mock = mock_herdr();
+        mock.add_response("herdr", &["tab", "close", "1:2"], ok_output(""));
+        let herdr = client_with(mock);
+        herdr.tab_close("1:2").unwrap();
     }
 
     #[test]

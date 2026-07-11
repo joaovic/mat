@@ -55,6 +55,13 @@ fn store_herdr_workspace<R: CommandRunner>(git: &GitClient<R>, branch: &str, wor
     let _ = git.config_set(&key, workspace_id);
 }
 
+fn store_herdr_tab<R: CommandRunner>(git: &GitClient<R>, branch: &str, tab_id: &str) {
+    let key = format!("branch.{}.mat-herdr-tab", branch);
+    if let Err(e) = git.config_set(&key, tab_id) {
+        print_warning(&format!("Failed to store herdr tab id: {}", e));
+    }
+}
+
 pub fn handle_create<R: CommandRunner>(
     task_type: &str,
     task_name: &str,
@@ -216,20 +223,21 @@ fn handle_worktree_herdr_tab<R: CommandRunner>(
 
     let (tab_id, root_pane_id) =
         herdr.tab_create(&workspace_id, Some(&names.worktree_name))?;
+    store_herdr_tab(git, &names.branch_name, &tab_id);
 
     let right_pane_id =
         herdr.pane_split(&root_pane_id, "right", true)?;
 
     herdr.pane_run(
         &right_pane_id,
-        &format!("cd {} && opencode .", path_str),
+        &format!("clear && cd {} && opencode .", path_str),
     )?;
 
     let bottom_pane_id = herdr.pane_split(&root_pane_id, "down", true)?;
 
-    herdr.pane_run(&root_pane_id, &format!("cd {} && ll", path_str))?;
+    herdr.pane_run(&root_pane_id, &format!("clear && cd {} && ll", path_str))?;
 
-    herdr.pane_run(&bottom_pane_id, &format!("cd {}", path_str))?;
+    herdr.pane_run(&bottom_pane_id, &format!("clear && cd {}", path_str))?;
 
     herdr.tab_focus(&tab_id)?;
 
@@ -1080,13 +1088,18 @@ mod tests {
             ok_output(r#"{"result":{"tab":{"tab_id":"1:2"},"root_pane":{"pane_id":"1-3"}}}"#),
         );
         mock.add_response(
+            "git",
+            &["config", "branch.feat/login.mat-herdr-tab", "1:2"],
+            ok_output(""),
+        );
+        mock.add_response(
             "herdr",
             &["pane", "split", "1-3", "--direction", "right", "--no-focus"],
             ok_output(r#"{"result":{"pane":{"pane_id":"1-4"}}}"#),
         );
         mock.add_response(
             "herdr",
-            &["pane", "run", "1-4", &format!("cd {} && opencode .", tree_path)],
+            &["pane", "run", "1-4", &format!("clear && cd {} && opencode .", tree_path)],
             ok_output(""),
         );
         mock.add_response(
@@ -1096,12 +1109,12 @@ mod tests {
         );
         mock.add_response(
             "herdr",
-            &["pane", "run", "1-3", &format!("cd {} && ll", tree_path)],
+            &["pane", "run", "1-3", &format!("clear && cd {} && ll", tree_path)],
             ok_output(""),
         );
         mock.add_response(
             "herdr",
-            &["pane", "run", "1-5", &format!("cd {}", tree_path)],
+            &["pane", "run", "1-5", &format!("clear && cd {}", tree_path)],
             ok_output(""),
         );
         mock.add_response(

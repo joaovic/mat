@@ -187,7 +187,13 @@ pub fn handle_close<R: CommandRunner>(
         )?
     };
 
-    // Step 4: Close herdr workspace and remove worktree
+    // Step 4: Read herdr tab id before branch deletion removes the config key
+    let herdr_tab_id = git
+        .config_get(&format!("branch.{}.mat-herdr-tab", branch_name))
+        .ok()
+        .filter(|id| !id.is_empty());
+
+    // Step 5: Close herdr workspace and remove worktree
     let use_herdr = should_use_herdr(config);
     let mut worktree_removed_by_herdr = false;
 
@@ -240,6 +246,26 @@ pub fn handle_close<R: CommandRunner>(
             "You are now on {}. Branch was not merged. Use 'git merge {}' to merge.",
             source_branch, branch_name
         ));
+    }
+
+    // Step 8: Close herdr tab if one was created for this branch
+    match herdr_tab_id {
+        Some(ref tab_id) => {
+            print_info(&format!("Closing herdr tab {}...", tab_id));
+            match herdr.tab_close(tab_id) {
+                Ok(()) => print_success("Herdr tab closed"),
+                Err(_) => {
+                    print_info("Trying to close panes individually...");
+                    match herdr.close_tab(tab_id) {
+                        Ok(()) => print_success("Herdr tab closed"),
+                        Err(e) => print_warning(&format!("Could not close herdr tab: {}", e)),
+                    }
+                }
+            }
+        }
+        None => {
+            print_info("No herdr tab to close");
+        }
     }
 
     if maybe_worktree_path.is_some() && !use_herdr {
@@ -368,13 +394,47 @@ branch refs/heads/feat/login
         );
     }
 
-    fn herdr_ws_config_mock(mock: &mut MockRunner, branch: &str, ws_id: &str) {
+fn herdr_ws_config_mock(mock: &mut MockRunner, branch: &str, ws_id: &str) {
+    mock.add_response(
+        "git",
+        &["config", "--get", &format!("branch.{}.mat-herdr-workspace", branch)],
+        ok_output(&format!("{}\n", ws_id)),
+    );
+}
+
+fn herdr_tab_config_mock(mock: &mut MockRunner, branch: &str, tab_id: &str) {
+    mock.add_response(
+        "git",
+        &["config", "--get", &format!("branch.{}.mat-herdr-tab", branch)],
+        ok_output(&format!("{}\n", tab_id)),
+    );
+}
+
+fn herdr_tab_close_mock(mock: &mut MockRunner, tab_id: &str, pane_ids: &[&str]) {
+    // First try direct tab_close
+    mock.add_response("herdr", &["tab", "close", tab_id], ok_output(""));
+    // If that fails, falls back to close_tab (pane list + pane close per pane)
+    mock.add_response(
+        "herdr",
+        &["pane", "list"],
+        ok_output(&pane_list_with_tab(tab_id, pane_ids)),
+    );
+    for pane_id in pane_ids {
         mock.add_response(
-            "git",
-            &["config", "--get", &format!("branch.{}.mat-herdr-workspace", branch)],
-            ok_output(&format!("{}\n", ws_id)),
+            "herdr",
+            &["pane", "close", pane_id],
+            ok_output(""),
         );
     }
+}
+
+fn pane_list_with_tab(tab_id: &str, pane_ids: &[&str]) -> String {
+    let panes: Vec<String> = pane_ids
+        .iter()
+        .map(|p| format!(r#"{{"pane_id":"{}","tab_id":"{}","workspace_id":"1"}}"#, p, tab_id))
+        .collect();
+    format!(r#"{{"result":{{"panes":[{}]}}}}"#, panes.join(","))
+}
 
     fn default_branch_mocks(mock: &mut MockRunner) {
         mock.add_error(
@@ -914,6 +974,52 @@ branch refs/heads/main
         let git = GitClient::new(mock.clone());
         let herdr = HerdrClient::new(mock);
         let config = config_herdr_always();
+
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_herdr_tab_closed_when_tab_config_found() {
+        let mut mock = mock_git();
+        setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
+        default_branch_mocks(&mut mock);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        worktree_remove_mock(&mut mock, "/repo.worktree/app-feat/login");
+        mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
+        herdr_tab_config_mock(&mut mock, "feat/login", "1:2");
+        herdr_tab_close_mock(&mut mock, "1:2", &["1-1", "1-2", "1-3"]);
+
+        let git = GitClient::new(mock.clone());
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_never();
+
+        let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_herdr_tab_close_fallback_when_tab_close_fails() {
+        let mut mock = mock_git();
+        setup_worktree_mocks(&mut mock, "/repo.worktree/app-feat/login");
+        default_branch_mocks(&mut mock);
+        successful_merge_from_mocks(&mut mock, "feat/login", "main", &MergeStrategy::MergeCommit);
+        worktree_remove_mock(&mut mock, "/repo.worktree/app-feat/login");
+        mock.add_response("git", &["branch", "-d", "feat/login"], ok_output(""));
+        herdr_tab_config_mock(&mut mock, "feat/login", "1:2");
+        // tab_close fails (no mock for it), falls through to close_tab
+        mock.add_response(
+            "herdr",
+            &["pane", "list"],
+            ok_output(&pane_list_with_tab("1:2", &["1-1", "1-2", "1-3"])),
+        );
+        mock.add_response("herdr", &["pane", "close", "1-1"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
+        mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));
+
+        let git = GitClient::new(mock.clone());
+        let herdr = HerdrClient::new(mock);
+        let config = config_herdr_never();
 
         let result = handle_close(false, &config, &git, &herdr, &cwd_in_worktree());
         assert!(result.is_ok());
