@@ -249,22 +249,13 @@ pub fn handle_close<R: CommandRunner>(
     }
 
     // Step 8: Close herdr tab if one was created for this branch
-    match herdr_tab_id {
-        Some(ref tab_id) => {
-            print_info(&format!("Closing herdr tab {}...", tab_id));
-            match herdr.tab_close(tab_id) {
+    if let Some(ref tab_id) = herdr_tab_id {
+        match herdr.tab_close(tab_id) {
+            Ok(()) => print_success("Herdr tab closed"),
+            Err(_) => match herdr.close_tab(tab_id) {
                 Ok(()) => print_success("Herdr tab closed"),
-                Err(_) => {
-                    print_info("Trying to close panes individually...");
-                    match herdr.close_tab(tab_id) {
-                        Ok(()) => print_success("Herdr tab closed"),
-                        Err(e) => print_warning(&format!("Could not close herdr tab: {}", e)),
-                    }
-                }
-            }
-        }
-        None => {
-            print_info("No herdr tab to close");
+                Err(e) => print_warning(&format!("Could not close herdr tab: {}", e)),
+            },
         }
     }
 
@@ -413,12 +404,19 @@ fn herdr_tab_config_mock(mock: &mut MockRunner, branch: &str, tab_id: &str) {
 fn herdr_tab_close_mock(mock: &mut MockRunner, tab_id: &str, pane_ids: &[&str]) {
     // First try direct tab_close
     mock.add_response("herdr", &["tab", "close", tab_id], ok_output(""));
-    // If that fails, falls back to close_tab (pane list + pane close per pane)
+    // If that fails, falls back to close_tab which sends /exit then closes each pane
     mock.add_response(
         "herdr",
         &["pane", "list"],
         ok_output(&pane_list_with_tab(tab_id, pane_ids)),
     );
+    for pane_id in pane_ids {
+        mock.add_response(
+            "herdr",
+            &["pane", "run", pane_id, "/exit"],
+            ok_output(""),
+        );
+    }
     for pane_id in pane_ids {
         mock.add_response(
             "herdr",
@@ -1013,6 +1011,9 @@ branch refs/heads/main
             &["pane", "list"],
             ok_output(&pane_list_with_tab("1:2", &["1-1", "1-2", "1-3"])),
         );
+        for pid in &["1-1", "1-2", "1-3"] {
+            mock.add_response("herdr", &["pane", "run", pid, "/exit"], ok_output(""));
+        }
         mock.add_response("herdr", &["pane", "close", "1-1"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));

@@ -283,6 +283,10 @@ impl<R: CommandRunner> HerdrClient<R> {
             });
         }
 
+        for pane_id in &tab_panes {
+            let _ = self.pane_run(pane_id, "/exit");
+        }
+
         for pane_id in tab_panes {
             self.pane_close(pane_id)?;
         }
@@ -588,6 +592,9 @@ mod tests {
                 ]}}"#,
             ),
         );
+        mock.add_response("herdr", &["pane", "run", "1-2", "/exit"], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-3", "/exit"], ok_output(""));
+        mock.add_response("herdr", &["pane", "run", "1-4", "/exit"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-2"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-3"], ok_output(""));
         mock.add_response("herdr", &["pane", "close", "1-4"], ok_output(""));
