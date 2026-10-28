@@ -1,4 +1,0 @@
-[defaults]
-ide = 'opencode'
-model = 'opencode-go/deepseek-v4-pro'
-reasoning_effort = 'high'
